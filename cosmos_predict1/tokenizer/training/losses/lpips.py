@@ -33,7 +33,7 @@ from tqdm import tqdm
 
 from cosmos_predict1.utils.distributed import is_rank0
 
-_TORCH_HOME = os.getenv("TORCH_HOME", "/home/rotem/.cache/torch")
+_TORCH_HOME = os.getenv("TORCH_HOME")
 _URL_MAP = {"vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"}
 _CKPT_MAP = {"vgg_lpips": "vgg.pth"}
 _MD5_MAP = {"vgg_lpips": "d507d7349b931f0638a25a48a722f98a"}

@@ -154,7 +154,7 @@ args.checkpoint_dec = f"{base_dir}/tokenizer/training/checkpoints/posttraining/t
 args.output_dir = f"{base_dir}/tokenizer/test_data/reconstructed_w50"
 os.makedirs(args.output_dir, exist_ok=True)
 args.output_fps = 25
-args.temporal_window = 50
+args.temporal_window = 64
 
 if args.mode == "torch" and args.tokenizer_type is None:
     logging.error("`torch` backend requires `--tokenizer_type` to be specified.")

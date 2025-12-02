@@ -167,7 +167,6 @@ class TokenizerModel(Model):
         iteration: int,
         ema_model: bool = False,
     ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-
         _input_key = self.get_input_key(data_batch)
         output_dict = self._network_forward(data_batch)
         input_images, recon_images = data_batch[_input_key], output_dict[RECON_KEY]

@@ -20,7 +20,7 @@ import os
 from loguru import logger as logging
 
 import sys
-sys.path.append("/home/rotem/cosmos-predict1")
+sys.path.append(os.getcwd())
 
 from cosmos_predict1.utils.config import Config, pretty_print_overrides
 from cosmos_predict1.utils.config_helper import get_config_module, override
@@ -50,11 +50,11 @@ def launch(config: Config, args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     # Usage: torchrun --nproc_per_node=1 -m scripts.train --config=projects/tutorials/mnist/config.py
+    # usage example without torchrun: python cosmos_predict1/tokenizer/training/train.py --config cosmos_predict1/tokenizer/training/configs/config.py -- experiment=Cosmos_Tokenize1_DV8x16x16_720p_SL_ft
 
     # Get the config file from the input arguments.
     parser = argparse.ArgumentParser(description="Training")
-    parser.add_argument("--config", help="Path to the config file",
-                        default="configs/config.py")
+    parser.add_argument("--config", help="Path to the config file", required=True)
     parser.add_argument(
         "opts",
         help="""
@@ -72,8 +72,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    args.opts = ['--', 'experiment=Cosmos_Tokenize1_DV8x16x16_720p_SL_ft']
-    # "Cosmos_Tokenize1_CV4x8x8_720p_SL_ft"
     config_module = get_config_module(args.config)
     config = importlib.import_module(config_module).make_config()
     config = override(config, args.opts)
