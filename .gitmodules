@@ -1,4 +1,0 @@
-[submodule "cosmos-predict1"]
-	path = cosmos-predict1
-	url = https://github.com/rotem-nagish/cosmos-predict1.git
-	branch = ft-cosmos
