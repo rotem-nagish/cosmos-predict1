@@ -33,7 +33,7 @@ class Config(config.Config):
             "_self_",
             {"data_train": "mock_video720"},
             {"data_val": "mock_video720"},
-            {"optimizer": "fused_adam"},
+            {"optimizer": "adamw"},#"fused_adam"},
             {"scheduler": "warmup"},
             {"network": "continuous_factorized_video"},
             {"loss": "video"},
@@ -67,6 +67,7 @@ def make_config():
     c.trainer.max_val_iter = 1
     c.trainer.logging_iter = 100
 
+    c.trainer.distributed_parallelism = None
     c.trainer.callbacks = None
     c.trainer.ddp.static_graph = True
     c.trainer.ddp.find_unused_parameters = False

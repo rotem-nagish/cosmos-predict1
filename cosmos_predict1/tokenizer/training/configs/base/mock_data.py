@@ -81,5 +81,5 @@ def get_mock_video_dataloader(
         ),
         batch_size=batch_size,
         shuffle=False,
-        num_workers=8,
+        num_workers=0,
     )

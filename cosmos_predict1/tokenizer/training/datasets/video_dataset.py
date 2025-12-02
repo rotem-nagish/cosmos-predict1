@@ -90,25 +90,29 @@ class Dataset(Dataset):
         return samples
 
     def _load_and_process_video_path(self, video_path):
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=2)
-        n_frames = len(vr)
+        try:
+            vr = VideoReader(video_path, ctx=cpu(0), num_threads=2)
+            n_frames = len(vr)
 
-        samples = []
-        for frame_i in range(0, n_frames, self.start_frame_interval):
-            sample = dict()
-            sample["video_path"] = video_path
-            sample["frame_ids"] = []
-            curr_frame_i = frame_i
-            while True:
-                if curr_frame_i > (n_frames - 1):
-                    break
-                sample["frame_ids"].append(curr_frame_i)
+            samples = []
+            for frame_i in range(0, n_frames, self.start_frame_interval):
+                sample = dict()
+                sample["video_path"] = video_path
+                sample["frame_ids"] = []
+                curr_frame_i = frame_i
+                while True:
+                    if curr_frame_i > (n_frames - 1):
+                        break
+                    sample["frame_ids"].append(curr_frame_i)
+                    if len(sample["frame_ids"]) == self.sequence_length:
+                        break
+                    curr_frame_i += self.sequence_interval
+                # make sure there are sequence_length number of frames
                 if len(sample["frame_ids"]) == self.sequence_length:
-                    break
-                curr_frame_i += self.sequence_interval
-            # make sure there are sequence_length number of frames
-            if len(sample["frame_ids"]) == self.sequence_length:
-                samples.append(sample)
+                    samples.append(sample)
+        except:
+            samples = []
+            
         return samples
 
     def __len__(self):

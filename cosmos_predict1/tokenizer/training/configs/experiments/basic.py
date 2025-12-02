@@ -26,7 +26,7 @@ CAUSAL_VIDEO_BASIC: LazyDict = LazyDict(
             {"override /data_train": "mock_video720"},
             {"override /data_val": "mock_video720"},
             {"override /loss": "video"},
-            {"override /optimizer": "fused_adam"},
+            {"override /optimizer": "adamw"},#fused_adam"},
             {"override /callbacks": ["basic"]},
             "_self_",
         ],

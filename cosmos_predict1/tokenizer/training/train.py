@@ -19,6 +19,9 @@ import os
 
 from loguru import logger as logging
 
+import sys
+sys.path.append("/home/rotem/cosmos-predict1")
+
 from cosmos_predict1.utils.config import Config, pretty_print_overrides
 from cosmos_predict1.utils.config_helper import get_config_module, override
 from cosmos_predict1.utils.lazy_config import instantiate
@@ -50,13 +53,14 @@ if __name__ == "__main__":
 
     # Get the config file from the input arguments.
     parser = argparse.ArgumentParser(description="Training")
-    parser.add_argument("--config", help="Path to the config file", required=True)
+    parser.add_argument("--config", help="Path to the config file",
+                        default="configs/config.py")
     parser.add_argument(
         "opts",
         help="""
-Modify config options at the end of the command. For Yacs configs, use
-space-separated "PATH.KEY VALUE" pairs.
-For python-based LazyConfig, use "path.key=value".
+        Modify config options at the end of the command. For Yacs configs, use
+        space-separated "PATH.KEY VALUE" pairs.
+        For python-based LazyConfig, use "path.key=value".
         """.strip(),
         default=None,
         nargs=argparse.REMAINDER,
@@ -66,7 +70,10 @@ For python-based LazyConfig, use "path.key=value".
         action="store_true",
         help="Do a dry run without training. Useful for debugging the config.",
     )
+
     args = parser.parse_args()
+    args.opts = ['--', 'experiment=Cosmos_Tokenize1_DV8x16x16_720p_SL_ft']
+    # "Cosmos_Tokenize1_CV4x8x8_720p_SL_ft"
     config_module = get_config_module(args.config)
     config = importlib.import_module(config_module).make_config()
     config = override(config, args.opts)

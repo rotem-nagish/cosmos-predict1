@@ -21,6 +21,10 @@ datasets/*
 !datasets/README.md
 apex/
 
+# Environment configuration (keep .env.example)
+.env
+!.env.example
+
 # Data types
 *.jit
 *.pt

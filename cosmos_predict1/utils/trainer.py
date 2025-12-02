@@ -48,40 +48,44 @@ class Trainer:
         """
         super().__init__()
         self.config = config
-        # Set up the distributed computing environment.
-        with misc.timer("init_distributed"):
-            distributed.init()
-            # Set up parallel states.
-            if hasattr(config.model, "context_parallel_size"):
-                if config.model_parallel.context_parallel_size > 1:
-                    raise ValueError(
-                        "Both config.model.context_parallel_size and config.model_parallel.context_parallel_size are set. "
-                        "config.model.context_parallel_size is deprecated. Please only set config.model_parallel.context_parallel_size."
-                    )
-                else:
-                    log.critical(
-                        "Using deprecated config.model.context_parallel_size. Please use config.model_parallel.context_parallel_size instead."
-                    )
-                    config.model_parallel.context_parallel_size = config.model.context_parallel_size
-            parallel_state.initialize_model_parallel(
-                pipeline_model_parallel_size=config.model_parallel.pipeline_model_parallel_size,
-                tensor_model_parallel_size=config.model_parallel.tensor_model_parallel_size,
-                context_parallel_size=config.model_parallel.context_parallel_size,
-            )
-            # `config.model_parallel.sequence_parallel` is a bool that indicates whether to use sequence parallelism.
-            # It is not part of the original `parallel_state` API, so we need to set it manually.
-            parallel_state.sequence_parallel = config.model_parallel.sequence_parallel
-            if parallel_state.sequence_parallel:
-                os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
 
-        # Create the local job directory, save the config file, and pipe to a local log.
-        if distributed.is_rank0():
-            os.makedirs(config.job.path_local, exist_ok=True)
-            # Save the config as .pkl for reproducibility.
-            LazyConfig.save_pkl(config, f"{config.job.path_local}/config.pkl")
-            # Save the config as .yaml for reading or parsing experiment hyperparameters.
-            LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
-        dist.barrier()
+        if self.config.trainer.distributed_parallelism != None:
+            # Set up the distributed computing environment.
+            with misc.timer("init_distributed"):
+                distributed.init()
+                # Set up parallel states.
+                if hasattr(config.model, "context_parallel_size"):
+                    if config.model_parallel.context_parallel_size > 1:
+                        raise ValueError(
+                            "Both config.model.context_parallel_size and config.model_parallel.context_parallel_size are set. "
+                            "config.model.context_parallel_size is deprecated. Please only set config.model_parallel.context_parallel_size."
+                        )
+                    else:
+                        log.critical(
+                            "Using deprecated config.model.context_parallel_size. Please use config.model_parallel.context_parallel_size instead."
+                        )
+                        config.model_parallel.context_parallel_size = config.model.context_parallel_size
+                parallel_state.initialize_model_parallel(
+                    pipeline_model_parallel_size=config.model_parallel.pipeline_model_parallel_size,
+                    tensor_model_parallel_size=config.model_parallel.tensor_model_parallel_size,
+                    context_parallel_size=config.model_parallel.context_parallel_size,
+                )
+                # `config.model_parallel.sequence_parallel` is a bool that indicates whether to use sequence parallelism.
+                # It is not part of the original `parallel_state` API, so we need to set it manually.
+                parallel_state.sequence_parallel = config.model_parallel.sequence_parallel
+                if parallel_state.sequence_parallel:
+                    os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
+
+            # Create the local job directory, save the config file, and pipe to a local log.
+            if distributed.is_rank0():
+                os.makedirs(config.job.path_local, exist_ok=True)
+                # Save the config as .pkl for reproducibility.
+                LazyConfig.save_pkl(config, f"{config.job.path_local}/config.pkl")
+                # Save the config as .yaml for reading or parsing experiment hyperparameters.
+                LazyConfig.save_yaml(config, f"{config.job.path_local}/config.yaml")
+
+            dist.barrier()
+
         log.init_loguru_file(f"{config.job.path_local}/stdout.log")
         if distributed.is_rank0():
             # Print important environment variables and the effective config.
@@ -140,7 +144,9 @@ class Trainer:
         elif self.config.trainer.distributed_parallelism == "fsdp":
             model_ddp = model
         else:
-            raise ValueError(f"Unknown distributed parallelism mode: {self.config.trainer.distributed_parallelism}")
+            model_ddp = model  # single-GPU, no wrapper
+            # raise ValueError(f"Unknown distributed parallelism mode: {self.config.trainer.distributed_parallelism}")
+
         log.info("Starting training...")
         self.callbacks.on_train_start(model, iteration=iteration)
         # Initial validation.
@@ -205,7 +211,8 @@ class Trainer:
             )
         self.callbacks.on_train_end(model, iteration=iteration)
         self.checkpointer.finalize()
-        distributed.barrier()
+        if self.config.trainer.distributed_parallelism != None:
+            distributed.barrier()
         self.callbacks.on_app_end()
 
     def training_step(
@@ -235,7 +242,10 @@ class Trainer:
             loss (torch.Tensor): The total loss of the training data batch.
         """
         # Only let DDP sync gradient at the last iteration of the gradient accumulation window
-        with distributed.ddp_sync_grad(model_ddp, grad_accum_iter == self.config.trainer.grad_accum_iter - 1):
+        # Only wrap DDP sync if using distributed
+        sync = self.config.trainer.distributed_parallelism == "ddp" and \
+               grad_accum_iter == self.config.trainer.grad_accum_iter - 1
+        with distributed.ddp_sync_grad(model_ddp, sync):
             with self.training_timer("forward"):
                 output_batch, loss = model_ddp.training_step(data, iteration)
             self.callbacks.on_before_backward(model_ddp, loss, iteration=iteration)

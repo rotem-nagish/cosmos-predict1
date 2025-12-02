@@ -46,7 +46,7 @@ def get_video_dataloader(
     num_video_frames=25,
     resolution="720",
     crop_height=128,
-    num_workers=8,
+    num_workers=8, #0
 ):
     if dataset_name.startswith("mock"):
         return get_mock_video_dataloader(

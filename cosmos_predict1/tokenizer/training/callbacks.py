@@ -136,11 +136,13 @@ class GradClipCallback(callback.GradClipCallback):
         iteration: int = 0,
     ) -> None:
         grad_scaler.unscale_(optimizer)
-        total_norm = torch.nn.utils.clip_grad_norm_(model_ddp.module.parameters(), max_norm=self.grad_clip_norm)
+        model_to_clip = model_ddp.module if hasattr(model_ddp, "module") else model_ddp
+        total_norm = torch.nn.utils.clip_grad_norm_(model_to_clip.parameters(), max_norm=self.grad_clip_norm)
+
         if torch.isnan(total_norm):
             raise ValueError("[gradient clipping] NaN detected in gradient norms")
         if torch.isfinite(total_norm) and total_norm > self.grad_clip_norm and self.verbose:
-            if model_ddp.module.network.training:
+            if model_to_clip.network.training:
                 log.warning(
                     f"[net:{iteration:07d}] Gradient norm {total_norm} > {self.grad_clip_norm}. Clipping gradients."
                 )

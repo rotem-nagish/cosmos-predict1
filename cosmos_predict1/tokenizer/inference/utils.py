@@ -16,6 +16,8 @@
 """Utility functions for the inference libraries."""
 
 import os
+os.environ["PATH"] = "/home/rotem/miniforge3/envs/cosmos-predict1/bin:" + os.environ["PATH"]
+
 from glob import glob
 from typing import Any
 

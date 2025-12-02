@@ -73,6 +73,7 @@ class CausalVideoTokenizer(torch.nn.Module):
             output_tensor = output_tensor[0] if isinstance(output_tensor, tuple) else output_tensor
         else:
             output_latent = self.encode(input_tensor)[0]
+            print("encoded latent shape:", output_latent.shape)
             output_tensor = self.decode(output_latent)
         return output_tensor
 

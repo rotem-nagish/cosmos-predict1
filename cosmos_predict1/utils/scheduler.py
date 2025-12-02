@@ -32,7 +32,7 @@ class WarmupLambdaLR(torch.optim.lr_scheduler.LambdaLR):
             return 1.0
 
         # Initialize the parent class with the generated lr_lambda
-        super(WarmupLambdaLR, self).__init__(optimizer, lr_lambda, last_epoch, verbose)
+        super(WarmupLambdaLR, self).__init__(optimizer, lr_lambda, last_epoch)
 
 
 # cosine lr decay scheduler with warmup from https://github.com/karpathy/nanoGPT/blob/master/train.py#L228

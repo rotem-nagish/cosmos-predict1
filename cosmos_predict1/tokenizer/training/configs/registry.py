@@ -29,15 +29,15 @@ from cosmos_predict1.tokenizer.training.configs.base.net import (
 )
 from cosmos_predict1.tokenizer.training.configs.base.optim import (
     AdamWConfig,
-    FusedAdamConfig,
+    # FusedAdamConfig,
     WarmupCosineLRConfig,
     WarmupLRConfig,
 )
 
 
 def register_training_data(cs):
-    for data_source in ["mock", "hdvila"]:
-        for resolution in ["1080", "720", "480", "360", "256"]:
+    for data_source in ["mock", "SL_ft"]: #"hdvila"]:
+        for resolution in ["720", "480", "360", "256"]: #"1080",
             cs.store(
                 group="data_train",
                 package="dataloader_train",
@@ -51,8 +51,8 @@ def register_training_data(cs):
 
 
 def register_val_data(cs):
-    for data_source in ["mock", "hdvila"]:
-        for resolution in ["1080", "720", "480", "360", "256"]:
+    for data_source in ["mock", "SL_ft"]: #"hdvila",
+        for resolution in ["720", "480", "360", "256"]: #"1080",
             cs.store(
                 group="data_val",
                 package="dataloader_val",
@@ -86,7 +86,7 @@ def register_net(cs):
 
 
 def register_optim(cs):
-    cs.store(group="optimizer", package="optimizer", name="fused_adam", node=FusedAdamConfig)
+    # cs.store(group="optimizer", package="optimizer", name="fused_adam", node=FusedAdamConfig)
     cs.store(group="optimizer", package="optimizer", name="adamw", node=AdamWConfig)
 
 

@@ -32,6 +32,7 @@ from cosmos_predict1.utils.lazy_config import instantiate
 
 _VIDEO_PATTERN_DICT = {
     "hdvila_video": "datasets/hdvila/videos/*.mp4",
+    "sl_ft_video": "/home/rotem/sign/data/*/*/*.mp4"
 }
 
 
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_name", default="hdvila_video")
+    parser.add_argument("--dataset_name", default="SL_ft")
     parser.add_argument("--dataset_type", default="video")
     parser.add_argument("--is_train", action="store_true")
     parser.add_argument("--resolution", default="720")

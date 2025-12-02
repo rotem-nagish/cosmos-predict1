@@ -37,9 +37,13 @@ import os
 import sys
 from argparse import ArgumentParser, Namespace
 from typing import Any
-
 import numpy as np
 from loguru import logger as logging
+
+import torch
+torch._C._jit_override_can_fuse_on_gpu(False)
+torch._C._jit_set_texpr_fuser_enabled(False)
+torch._C._jit_set_nvfuser_enabled(False)
 
 from cosmos_predict1.tokenizer.inference.utils import (
     get_filepaths,
@@ -139,6 +143,19 @@ def _parse_args() -> tuple[Namespace, dict[str, Any]]:
 
 logging.info("Initializes args ...")
 args = _parse_args()
+
+# model_name = "Cosmos-Tokenize1-CV4x8x8-360p-SL_ft"
+model_name = "Cosmos-Tokenize1-DV8x16x16-360p-SL_ft"
+iter_num = "000035000" # TODO update after training
+base_dir = "/home/rotem/cosmos-predict1/cosmos_predict1"
+args.video_pattern = f'{base_dir}/tokenizer/test_data/*.mp4'
+args.checkpoint_enc = f"{base_dir}/tokenizer/training/checkpoints/posttraining/tokenizer/{model_name}/checkpoints/iter_{iter_num}_enc.jit"
+args.checkpoint_dec = f"{base_dir}/tokenizer/training/checkpoints/posttraining/tokenizer/{model_name}/checkpoints/iter_{iter_num}_dec.jit"
+args.output_dir = f"{base_dir}/tokenizer/test_data/reconstructed_w50"
+os.makedirs(args.output_dir, exist_ok=True)
+args.output_fps = 25
+args.temporal_window = 50
+
 if args.mode == "torch" and args.tokenizer_type is None:
     logging.error("`torch` backend requires `--tokenizer_type` to be specified.")
     sys.exit(1)
@@ -174,6 +191,10 @@ def _run_eval() -> None:
     logging.info(f"Found {len(filepaths)} videos from {args.video_pattern}.")
 
     for filepath in filepaths:
+        output_filepath = get_output_filepath(filepath, output_dir=args.output_dir)
+        if os.path.exists(output_filepath): # TODO uncomment?
+            continue
+
         logging.info(f"Reading video {filepath} ...")
         video = read_video(filepath)
         video = resize_video(video, short_size=args.short_size)
@@ -181,8 +202,6 @@ def _run_eval() -> None:
         logging.info("Invoking the autoencoder model in ... ")
         batch_video = video[np.newaxis, ...]
         output_video = autoencoder(batch_video, temporal_window=args.temporal_window)[0]
-        logging.info("Constructing output filepath ...")
-        output_filepath = get_output_filepath(filepath, output_dir=args.output_dir)
         logging.info(f"Outputing {output_filepath} ...")
         write_video(output_filepath, output_video, fps=args.output_fps)
         if args.save_input:

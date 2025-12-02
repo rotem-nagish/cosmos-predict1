@@ -19,14 +19,14 @@ from cosmos_predict1.tokenizer.training.configs.experiments.utils import create_
 from cosmos_predict1.utils import log
 from cosmos_predict1.utils.lazy_config import LazyDict
 
-# Post-training config for Cosmos-Tokenize1-CV8x8x8-720p-HDVILA
-Cosmos_Tokenize1_CV8x8x8_720p_HDVILA: LazyDict = LazyDict(
+# Post-training config for Cosmos-Tokenize1-CV8x8x8-720p-SL_ft
+Cosmos_Tokenize1_CV8x8x8_720p_SL_ft: LazyDict = LazyDict(
     dict(
         defaults=[
             "/experiment/video_basic",
             {"override /network": "continuous_factorized_video"},
-            {"override /data_train": "hdvila_video720"},
-            {"override /data_val": "hdvila_video720"},
+            {"override /data_train": "SL_ft_video720"},
+            {"override /data_val": "SL_ft_video720"},
             "_self_",
         ],
         dataloader_train=dict(
@@ -57,7 +57,7 @@ Cosmos_Tokenize1_CV8x8x8_720p_HDVILA: LazyDict = LazyDict(
         job=dict(
             project="posttraining",
             group="tokenizer",
-            name="Cosmos-Tokenize1-CV8x8x8-720p-HDVILA",
+            name="Cosmos-Tokenize1-CV8x8x8-720p-SL_ft",
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-CV8x8x8-720p/model.pt",
@@ -68,14 +68,14 @@ Cosmos_Tokenize1_CV8x8x8_720p_HDVILA: LazyDict = LazyDict(
     )
 )
 
-# Post-training config for Cosmos-Tokenize1-DV8x16x16-720p-HDVILA
-Cosmos_Tokenize1_DV8x16x16_720p_HDVILA: LazyDict = LazyDict(
+# Post-training config for Cosmos-Tokenize1-DV8x16x16-720p-SL_ft
+Cosmos_Tokenize1_DV8x16x16_720p_SL_ft: LazyDict = LazyDict(
     dict(
         defaults=[
             "/experiment/video_basic",
             {"override /network": "discrete_factorized_video"},
-            {"override /data_train": "hdvila_video720"},
-            {"override /data_val": "hdvila_video720"},
+            {"override /data_train": "SL_ft_video720"},
+            {"override /data_val": "SL_ft_video720"},
             "_self_",
         ],
         dataloader_train=dict(
@@ -108,25 +108,25 @@ Cosmos_Tokenize1_DV8x16x16_720p_HDVILA: LazyDict = LazyDict(
         job=dict(
             project="posttraining",
             group="tokenizer",
-            name="Cosmos-Tokenize1-DV8x16x16-720p-HDVILA",
+            name="Cosmos-Tokenize1-DV8x16x16-720p-SL_ft",
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-DV8x16x16-720p/model.pt",
             strict_resume=True,
-            load_training_state=True,
+            load_training_state=False,
             jit=dict(input_shape=[1, 3, 17, 512, 512]),
         ),
     )
 )
 
-# Post-training config for Cosmos-Tokenize1-CV4x8x8-360p-HDVILA
-Cosmos_Tokenize1_CV4x8x8_360p_HDVILA: LazyDict = LazyDict(
+# Post-training config for Cosmos-Tokenize1-CV4x8x8-360p-SL_ft
+Cosmos_Tokenize1_CV4x8x8_360p_SL_ft: LazyDict = LazyDict(
     dict(
         defaults=[
             "/experiment/video_basic",
             {"override /network": "continuous_factorized_video"},
-            {"override /data_train": "hdvila_video360"},
-            {"override /data_val": "hdvila_video360"},
+            {"override /data_train": "SL_ft_video360"},
+            {"override /data_val": "SL_ft_video360"},
             "_self_",
         ],
         dataloader_train=dict(
@@ -157,25 +157,25 @@ Cosmos_Tokenize1_CV4x8x8_360p_HDVILA: LazyDict = LazyDict(
         job=dict(
             project="posttraining",
             group="tokenizer",
-            name="Cosmos-Tokenize1-CV4x8x8-360p-HDVILA",
+            name="Cosmos-Tokenize1-CV4x8x8-360p-SL_ft",
         ),
         checkpoint=dict(
-            load_path="checkpoints/Cosmos-Tokenize1-CV4x8x8-360p/model.pt",
+            load_path="/home/rotem/cosmos-predict1/checkpoints/Cosmos-Tokenize1-CV4x8x8-360p/model.pt",
             strict_resume=True,
-            load_training_state=True,
+            load_training_state=False,
             jit=dict(input_shape=[1, 3, 17, 512, 512]),
         ),
     )
 )
 
-# Post-training config for Cosmos-Tokenize1-DV4x8x8-360p-HDVILA
-Cosmos_Tokenize1_DV4x8x8_360p_HDVILA: LazyDict = LazyDict(
+# Post-training config for Cosmos-Tokenize1-DV4x8x8-360p-SL_ft
+Cosmos_Tokenize1_DV4x8x8_360p_SL_ft: LazyDict = LazyDict(
     dict(
         defaults=[
             "/experiment/video_basic",
             {"override /network": "discrete_factorized_video"},
-            {"override /data_train": "hdvila_video360"},
-            {"override /data_val": "hdvila_video360"},
+            {"override /data_train": "SL_ft_video360"},
+            {"override /data_val": "SL_ft_video360"},
             "_self_",
         ],
         dataloader_train=dict(
@@ -208,12 +208,12 @@ Cosmos_Tokenize1_DV4x8x8_360p_HDVILA: LazyDict = LazyDict(
         job=dict(
             project="posttraining",
             group="tokenizer",
-            name="Cosmos-Tokenize1-DV4x8x8-360p-HDVILA",
+            name="Cosmos-Tokenize1-DV4x8x8-360p-SL_ft",
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-DV4x8x8-360p/model.pt",
             strict_resume=True,
-            load_training_state=True,
+            load_training_state=False,
             jit=dict(input_shape=[1, 3, 17, 512, 512]),
         ),
     )
@@ -222,10 +222,10 @@ Cosmos_Tokenize1_DV4x8x8_360p_HDVILA: LazyDict = LazyDict(
 cs = ConfigStore.instance()
 
 for _item in [
-    Cosmos_Tokenize1_CV8x8x8_720p_HDVILA,
-    Cosmos_Tokenize1_DV8x16x16_720p_HDVILA,
-    Cosmos_Tokenize1_CV4x8x8_360p_HDVILA,
-    Cosmos_Tokenize1_DV4x8x8_360p_HDVILA,
+    Cosmos_Tokenize1_CV8x8x8_720p_SL_ft,
+    Cosmos_Tokenize1_DV8x16x16_720p_SL_ft,
+    Cosmos_Tokenize1_CV4x8x8_360p_SL_ft,
+    Cosmos_Tokenize1_DV4x8x8_360p_SL_ft,
 ]:
     experiment_name = [name for name, value in globals().items() if value is _item][0]
 
