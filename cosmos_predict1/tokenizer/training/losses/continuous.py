@@ -46,17 +46,17 @@ class TokenizerLoss(nn.Module):
         loss = dict()
         total_loss = 0.0
 
-        inputs[MASK_KEY] = torch.ones_like(inputs[INPUT_KEY])
+        # inputs[MASK_KEY] = torch.ones_like(inputs[INPUT_KEY])
         # Calculates reconstruction losses (`total_loss`).
         for key, module in self.loss_modules.items():
             curr_loss = module(inputs, output_batch, iteration)
             loss.update({k: torch.mean(v) for k, v in curr_loss.items()})
             total_loss += sum([self.reduce(v) if (v.dim() > 0) else v for v in curr_loss.values()])
 
-        loss.update({k: torch.mean(v) for k, v in curr_loss.items()})
-
+        # loss.update({k: torch.mean(v) for k, v in curr_loss.items()}) # TODO why was this here? seems redundant.. adding curr_loss twice..
         # Computes the overall loss as sum of the reconstruction losses and the generator loss.
-        total_loss += sum([self.reduce(v) if (v.dim() > 0) else v for v in curr_loss.values()])
+        # total_loss += sum([self.reduce(v) if (v.dim() > 0) else v for v in curr_loss.values()])
+
         return dict(loss=loss), total_loss
 
 
@@ -89,8 +89,9 @@ class ColorLoss(torch.nn.Module):
     def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
         reconstructions = output_batch[RECON_KEY]
         weights = inputs[MASK_KEY]
-        recon = weights * torch.abs(inputs[INPUT_KEY].contiguous() - reconstructions.contiguous())
-        color_weighted = self.schedule(iteration) * recon
+        recon = torch.abs(inputs[INPUT_KEY].contiguous() - reconstructions.contiguous())
+        masked_recon = (recon * weights).sum() / (weights.sum() + 1e-8)
+        color_weighted = self.schedule(iteration) * masked_recon
         if torch.isnan(color_weighted).any():
             raise ValueError("[COLOR] NaN detected in loss")
         return dict(color=color_weighted)

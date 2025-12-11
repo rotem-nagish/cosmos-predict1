@@ -25,7 +25,7 @@ import traceback
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
-
+import os
 import numpy as np
 import torch
 from decord import VideoReader, cpu
@@ -154,6 +154,13 @@ class Dataset(Dataset):
             data["num_frames"] = self.sequence_length
             data["padding_mask"] = torch.zeros(1, 704, 1280)  # .cuda()
 
+            data["loss_mask"] = torch.ones_like(video)  # [C, T, H, W]
+            pose_path = video_path.replace("/processed/", "/pose_masks/")[:-len(".mp4")]+".pt"
+            if os.path.exists(pose_path):
+                data["loss_mask"] = torch.load(pose_path)[frame_ids[0]:frame_ids[0]+self.sequence_length]
+                data["loss_mask"] = torch.where(data["loss_mask"] == 0, torch.tensor(0.2, device=data["loss_mask"].device), data["loss_mask"]/255)
+                data["loss_mask"] = data["loss_mask"].unsqueeze(0).repeat(3, 1, 1, 1)
+
             return data
         except Exception:
             warnings.warn(
@@ -169,13 +176,13 @@ class Dataset(Dataset):
 
 if __name__ == "__main__":
     dataset = Dataset(
-        video_directory_or_pattern="assets/example_training_data/videos/*.mp4",
+        video_pattern="/home/rotem/sign/data/processed/*/*/*.mp4",
         sequence_interval=1,
-        num_frames=57,
-        video_size=[240, 360],
+        num_video_frames=49,
+        # video_size=[240, 360],
     )
 
-    indices = [0, 13, 200, -1]
+    indices = [0, 1, 13, -1]
     for idx in indices:
         data = dataset[idx]
         print((f"{idx=} " f"{data['video'].sum()=}\n" f"{data['video'].shape=}\n" f"{data['video_name']=}\n" "---"))
