@@ -27,6 +27,7 @@ from pose_evaluation.metrics.dtw_metric import DTWDTAIImplementationDistanceMeas
 from pose_evaluation.metrics.pose_processors import *
 
 from cosmos_predict1.tokenizer.modules.utils import time2batch
+from cosmos_predict1.utils import log
 from cosmos_predict1.utils.lazy_config import instantiate
 
 _VALID_METRIC_NAMES = ["PSNR", "SSIM", "CodeUsage", "PoseEstimation"]
@@ -204,7 +205,7 @@ class PoseEstimationMetric(torch.nn.Module):
     def _compute_dtwp(self, gt_pose: Pose, pred_pose: Pose) -> float:
         try:
             return float(self.dtwp.score(gt_pose, pred_pose))
-        except Exception as e:
+        except Exception:
             return 1.0
 
     def forward(
@@ -236,4 +237,5 @@ class PoseEstimationMetric(torch.nn.Module):
             return dict(PoseEstimationDTWp=torch.tensor(dtwp_distance, dtype=torch.float32, device=reconstructions.device))
 
         except Exception as e:
+            log.warning(f"PoseEstimationMetric failed: {e}")
             return dict()

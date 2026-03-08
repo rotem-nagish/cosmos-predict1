@@ -22,6 +22,8 @@ cosmos_predict1.tokenizer.training.datasets.dataset_provider \
     --is_train
 """
 
+from torch.utils.data._utils.collate import default_collate
+
 from cosmos_predict1.tokenizer.training.datasets.augmentation_provider import (
     video_train_augmentations,
     video_val_augmentations,
@@ -29,6 +31,23 @@ from cosmos_predict1.tokenizer.training.datasets.augmentation_provider import (
 from cosmos_predict1.tokenizer.training.datasets.utils import categorize_aspect_and_store
 from cosmos_predict1.tokenizer.training.datasets.video_dataset import Dataset
 from cosmos_predict1.utils.lazy_config import instantiate
+
+
+def pose_collate_fn(batch):
+    """Collate that keeps gt_pose Pose objects as a list instead of stacking."""
+    if not batch:
+        return {}
+    result = {}
+    for key in batch[0]:
+        values = [d[key] for d in batch]
+        if key == "gt_pose":
+            result[key] = values
+        else:
+            try:
+                result[key] = default_collate(values)
+            except Exception:
+                result[key] = values
+    return result
 
 _VIDEO_PATTERN_DICT = {
     "hdvila_video": "datasets/hdvila/videos/*.mp4",

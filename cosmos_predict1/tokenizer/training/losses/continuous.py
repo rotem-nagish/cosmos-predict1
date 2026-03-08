@@ -21,8 +21,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 import torchvision.models.optical_flow as optical_flow
-from typing import Dict
-
 from pose_format import Pose
 
 from cosmos_predict1.tokenizer.modules.utils import batch2time, time2batch
