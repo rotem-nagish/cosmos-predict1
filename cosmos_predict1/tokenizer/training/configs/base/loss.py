@@ -35,6 +35,7 @@ from cosmos_predict1.tokenizer.training.losses.continuous import (
     FlowLoss,
     KLLoss,
     PerceptualLoss,
+    PosePredictionLoss,
     TokenizerLoss,
     VideoConsistencyLoss,
 )
@@ -107,6 +108,15 @@ class VideoConsistencyConfig:
 
 
 @attrs.define(slots=False)
+class PosePredictionConfig:
+    boundaries: list[int] = [0]
+    values: list[float] = [1.0]
+    hand_weight: float = 2.0
+    face_weight: float = 1.5
+    pose_normalization: str = 'mean_std'
+
+
+@attrs.define(slots=False)
 class VideoLoss:
     # The combined loss function, and its reduction mode.
     color: LazyDict = L(ColorLoss)(config=ColorConfig())
@@ -114,6 +124,7 @@ class VideoLoss:
     perceptual: LazyDict = L(PerceptualLoss)(config=PerceptualConfig())
     flow: LazyDict = L(FlowLoss)(config=FlowConfig())
     video_consistency: LazyDict = L(VideoConsistencyLoss)(config=VideoConsistencyConfig())
+    pose_prediction: LazyDict = L(PosePredictionLoss)(config=PosePredictionConfig())
     reduce: str = ReduceMode.MEAN.value  # model.config.loss.config.reduce={'MEAN', 'SUM', 'SUM_PER_FRAME'}
 
 
