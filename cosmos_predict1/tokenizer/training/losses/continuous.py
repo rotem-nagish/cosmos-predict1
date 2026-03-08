@@ -46,17 +46,16 @@ class TokenizerLoss(nn.Module):
         loss = dict()
         total_loss = 0.0
 
-        inputs[MASK_KEY] = torch.ones_like(inputs[INPUT_KEY])
         # Calculates reconstruction losses (`total_loss`).
         for key, module in self.loss_modules.items():
+            if hasattr(module, 'schedule') and module.schedule(iteration) == 0:
+                continue
+            if hasattr(module, 'enabled') and not module.enabled:
+                continue
             curr_loss = module(inputs, output_batch, iteration)
             loss.update({k: torch.mean(v) for k, v in curr_loss.items()})
             total_loss += sum([self.reduce(v) if (v.dim() > 0) else v for v in curr_loss.values()])
 
-        loss.update({k: torch.mean(v) for k, v in curr_loss.items()})
-
-        # Computes the overall loss as sum of the reconstruction losses and the generator loss.
-        total_loss += sum([self.reduce(v) if (v.dim() > 0) else v for v in curr_loss.values()])
         return dict(loss=loss), total_loss
 
 
@@ -89,8 +88,9 @@ class ColorLoss(torch.nn.Module):
     def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
         reconstructions = output_batch[RECON_KEY]
         weights = inputs[MASK_KEY]
-        recon = weights * torch.abs(inputs[INPUT_KEY].contiguous() - reconstructions.contiguous())
-        color_weighted = self.schedule(iteration) * recon
+        recon = torch.abs(inputs[INPUT_KEY].contiguous() - reconstructions.contiguous())
+        masked_recon = (recon * weights).sum() / (weights.sum() + 1e-8)
+        color_weighted = self.schedule(iteration) * masked_recon
         if torch.isnan(color_weighted).any():
             raise ValueError("[COLOR] NaN detected in loss")
         return dict(color=color_weighted)
@@ -396,8 +396,10 @@ class VideoConsistencyLoss(torch.nn.Module):
         self.num_frames = config.num_frames
         self.step = config.step
         self.num_windows = None
+        self.use_mask = getattr(config, 'use_mask', False)
+        self.shuffled_mask = None
 
-    def shuffle(self, inputs: torch.Tensor) -> torch.Tensor:
+    def shuffle(self, inputs: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
         """
         For input video of [B, 3, T, H, W], this function will reshape the video to
         the shape of [B*(T-num_frames+1)//step, 3, num_frames, H, W] using a sliding window
@@ -412,6 +414,10 @@ class VideoConsistencyLoss(torch.nn.Module):
         outputs = inputs.unfold(dimension=2, size=self.num_frames, step=self.step)
         self.num_windows = outputs.shape[2]
         outputs = einops.rearrange(outputs, "b c m h w n -> (b m) c n h w")
+
+        if mask is not None and self.use_mask:
+            mask_shuffled = mask.unfold(dimension=2, size=self.num_frames, step=self.step)
+            self.shuffled_mask = einops.rearrange(mask_shuffled, "b c m h w n -> (b m) c n h w")
 
         return outputs
 
@@ -433,7 +439,15 @@ class VideoConsistencyLoss(torch.nn.Module):
         videos = reconstructions.view(B, self.num_windows, C, self.num_frames, H, W)
 
         # Compute the L1 distance between overlapped frames for all windows at once
-        diff = torch.mean(torch.abs(videos[:, :-1, :, self.step :, :, :] - videos[:, 1:, :, : -self.step, :, :]))
+        frame_diff = torch.abs(videos[:, :-1, :, self.step :, :, :] - videos[:, 1:, :, : -self.step, :, :])
+
+        if self.use_mask and self.shuffled_mask is not None:
+            mask = self.shuffled_mask.view(B, self.num_windows, 1, self.num_frames, H, W)
+            background_mask = 1.0 - mask
+            bg_mask_overlap = background_mask[:, :-1, :, self.step:, :, :]
+            diff = (frame_diff * bg_mask_overlap).sum() / (bg_mask_overlap.sum() + 1e-8)
+        else:
+            diff = torch.mean(frame_diff)
         diff_weighted = self.schedule(iteration) * diff
 
         if LATENT_KEY not in output_batch:
