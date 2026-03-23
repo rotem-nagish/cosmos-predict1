@@ -257,6 +257,7 @@ class TrainerConfig:
         dict(
             ema=L(callback.EMAModelCallback)(),
             progress_bar=L(callback.ProgressBarCallback)(),
+            logger=L(callback.IterationLoggerCallback)(),
         )
     )
     # distributed parallelism strategy
