@@ -117,7 +117,8 @@ class TokenizerModel(Model):
         if hasattr(consistency_loss, "enabled") and consistency_loss.enabled:
             _input_key = self.get_input_key(data_batch)
             if _input_key is self.video_key:
-                data_batch[_input_key] = consistency_loss.shuffle(data_batch[_input_key])
+                mask = data_batch.get("loss_mask", None) if consistency_loss.use_mask else None
+                data_batch[_input_key] = consistency_loss.shuffle(data_batch[_input_key], mask=mask)
         return
 
     def _on_after_network_forward(
@@ -183,7 +184,7 @@ class TokenizerModel(Model):
         }
 
         loss_dict, loss_value = self.loss(inputs, output_dict, iteration)
-        metric_dict = self.metric(input_images, output_dict, iteration)
+        metric_dict = self.metric(inputs, output_dict, iteration)
         loss_dict.update(metric_dict)
         prediction_key = EMA_PREDICTION if ema_model else PREDICTION
         return dict({prediction_key: recon_images, **loss_dict}), loss_value
