@@ -42,11 +42,11 @@ def dataloader_register(key):
 def get_video_dataloader(
     dataset_name,
     is_train,
-    batch_size=1,
+    batch_size=2,
     num_video_frames=25,
     resolution="720",
     crop_height=128,
-    num_workers=8,
+    num_workers=1,
 ):
     if dataset_name.startswith("mock"):
         return get_mock_video_dataloader(
@@ -67,9 +67,9 @@ def get_video_dataloader(
         ),
         batch_size=batch_size,  # 2
         num_workers=num_workers,  # 8
-        prefetch_factor=2,
-        shuffle=None,  # do we need this?
+        prefetch_factor=4 if is_train else 2,
+        shuffle=is_train,
         sampler=None,
-        persistent_workers=False,
+        persistent_workers=is_train,
         pin_memory=True,
     )
