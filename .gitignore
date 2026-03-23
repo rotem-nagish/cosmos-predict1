@@ -249,3 +249,4 @@ manifest.json
 wandb/
 onelogger.err
 onelogger.log
+cosmos_predict1/tokenizer/test_data/
