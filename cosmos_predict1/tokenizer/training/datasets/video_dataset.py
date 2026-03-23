@@ -21,19 +21,24 @@ Adapted from:
 https://github.com/bytedance/IRASim/blob/main/dataset/dataset_3D.py
 """
 
+import os
 import traceback
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 import os
 import numpy as np
+import pandas as pd
 import torch
 from decord import VideoReader, cpu
+from pose_format import Pose
+from pose_format.utils.generic import reduce_holistic, pose_hide_legs
 from torch.utils.data import Dataset
 from torchvision import transforms as T
 from tqdm import tqdm
 
 from cosmos_predict1.diffusion.utils.dataset_utils import ToTensorVideo
+from cosmos_predict1.tokenizer.training.datasets.pose_normalizations import normalize_pose
 
 
 class Dataset(Dataset):
@@ -43,6 +48,8 @@ class Dataset(Dataset):
         sequence_interval=1,
         start_frame_interval=1,
         num_video_frames=25,
+        pose_normalization='mean_std',
+        limit=None,
     ):
         """Dataset class for loading image-text-to-video generation data.
 
@@ -62,9 +69,17 @@ class Dataset(Dataset):
         self.start_frame_interval = start_frame_interval
         self.sequence_interval = sequence_interval
         self.sequence_length = num_video_frames
+        self.pose_normalization = pose_normalization
 
         self.video_paths = sorted(glob(str(video_pattern)))
+        if limit is not None:
+            self.video_paths = self.video_paths[:limit]
         print(f"{len(self.video_paths)} videos in total")
+        if "/mnt/rylo-tnas" in os.getcwd():
+            metadata = pd.read_csv("/mnt/rylo-tnas/users/rotem/sign/data/video_list.csv")
+        else:
+            metadata = pd.read_csv("/workspace/datasets/video_list.csv")
+        self.vid2md5 = {row.name: row.md5Hash for row in metadata.itertuples()}
 
         self.samples = self._init_samples(self.video_paths)
         self.samples = sorted(self.samples, key=lambda x: (x["video_path"], x["frame_ids"][0]))
@@ -149,6 +164,36 @@ class Dataset(Dataset):
                 "video_path": video_path,
                 "start_frame_id": str(frame_ids[0]),
             }
+
+            # Determine base_path for pose lookup
+            if "processed" in video_path:
+                base_path = video_path[video_path.find("processed/")+10:]
+            elif "128x128" in video_path:
+                base_path = video_path[video_path.find("128x128/")+8:]
+            elif "512x512" in video_path:
+                base_path = video_path[video_path.find("512x512/")+8:]
+            else:
+                base_path = os.path.basename(video_path)
+
+            if "sign-tube" in base_path:
+                base_path = base_path.replace("sign-tube/videos", "sign-tube")
+
+            try:
+                md5 = self.vid2md5[base_path]
+                if "/mnt/rylo-tnas" in os.getcwd():
+                    pose_path = os.path.join("/mnt/nas/GCS/sign-mediapipe-holistic-poses", md5 + ".pose")
+                else:
+                    pose_path = os.path.join("/workspace/poses", md5 + ".pose")
+
+                with open(pose_path, "rb") as f:
+                    data["gt_pose"] = Pose.read(f)
+                    data["gt_pose"] = pose_hide_legs(reduce_holistic(data["gt_pose"]))
+                    data["gt_pose"] = normalize_pose(data["gt_pose"], strategy=self.pose_normalization)
+                    data["gt_pose"].body.data = data["gt_pose"].body.data[frame_ids[0]:frame_ids[0]+self.sequence_length, :, :]
+                    data["gt_pose"].body.confidence = data["gt_pose"].body.confidence[frame_ids[0]:frame_ids[0]+self.sequence_length, :, :]
+            except Exception:
+                data["gt_pose"] = []
+
             data["fps"] = 24
             data["image_size"] = torch.tensor([704, 1280, 704, 1280])  # .cuda()  # TODO: Does this matter?
             data["num_frames"] = self.sequence_length

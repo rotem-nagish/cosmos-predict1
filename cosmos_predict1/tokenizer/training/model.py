@@ -155,7 +155,11 @@ class TokenizerModel(Model):
         input_images, recon_images = data_batch[_input_key], output_dict[RECON_KEY]
 
         # pass loss_mask to loss computation
-        inputs = {INPUT_KEY: input_images, MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images))}
+        inputs = {
+            INPUT_KEY: input_images,
+            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images)),
+            "gt_pose": data_batch.get("gt_pose", None),
+        }
 
         loss_dict, loss_value = self.loss(inputs, output_dict, iteration)
         return dict({PREDICTION: recon_images, **loss_dict}), loss_value
@@ -172,7 +176,11 @@ class TokenizerModel(Model):
         input_images, recon_images = data_batch[_input_key], output_dict[RECON_KEY]
 
         # pass loss_mask to loss computation
-        inputs = {INPUT_KEY: input_images, MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images))}
+        inputs = {
+            INPUT_KEY: input_images,
+            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images)),
+            "gt_pose": data_batch.get("gt_pose", None),
+        }
 
         loss_dict, loss_value = self.loss(inputs, output_dict, iteration)
         metric_dict = self.metric(input_images, output_dict, iteration)

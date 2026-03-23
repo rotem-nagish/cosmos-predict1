@@ -15,11 +15,13 @@
 
 """The combined loss functions for continuous-space tokenizers training."""
 import einops
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 import torchvision.models.optical_flow as optical_flow
+from pose_format import Pose
 
 from cosmos_predict1.tokenizer.modules.utils import batch2time, time2batch
 from cosmos_predict1.tokenizer.training.datasets.utils import INPUT_KEY, LATENT_KEY, MASK_KEY, RECON_KEY
@@ -27,7 +29,8 @@ from cosmos_predict1.tokenizer.training.losses import ReduceMode
 from cosmos_predict1.tokenizer.training.losses.lpips import LPIPS
 from cosmos_predict1.utils.lazy_config import instantiate
 
-_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency"]
+_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency", "pose_prediction"]
+POSE_PREDICTION_KEY = "pose_prediction"
 VIDEO_CONSISTENCY_LOSS = "video_consistency"
 RECON_CONSISTENCY_KEY = f"{RECON_KEY}_consistency"
 
@@ -478,3 +481,100 @@ class VideoConsistencyLoss(torch.nn.Module):
         outputs = outputs / counter
 
         return outputs
+
+
+class PosePredictionLoss(torch.nn.Module):
+    """
+    Differentiable loss for pose prediction from MLP.
+    This loss compares the pose predicted by the tokenizer's MLP against ground truth pose.
+    """
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.schedule = WeightScheduler(boundaries=config.boundaries, values=config.values)
+        self.hand_weight = getattr(config, 'hand_weight', 2.0)
+        self.face_weight = getattr(config, 'face_weight', 1.5)
+        self.pose_normalization = getattr(config, 'pose_normalization', 'mean_std')
+        self.pose_mean = None
+        self.pose_std = None
+
+    def _get_pose_normalization_stats(self, gt_pose: Pose, device, dtype):
+        if self.pose_mean is not None and self.pose_std is not None:
+            return self.pose_mean, self.pose_std
+
+        from pose_anonymization.data.normalization import load_mean_and_std_for_pose
+        mean_np, std_np = load_mean_and_std_for_pose(gt_pose)
+
+        num_keypoints = gt_pose.body.data.shape[2]
+        mean_reshaped = mean_np.reshape(num_keypoints, 3)
+        std_reshaped = std_np.reshape(num_keypoints, 3)
+
+        self.pose_mean = torch.from_numpy(mean_reshaped).to(device, dtype).unsqueeze(0).unsqueeze(0)
+        self.pose_std = torch.from_numpy(std_reshaped).to(device, dtype).unsqueeze(0).unsqueeze(0)
+
+        return self.pose_mean, self.pose_std
+
+    def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
+        if POSE_PREDICTION_KEY not in output_batch or output_batch[POSE_PREDICTION_KEY] is None:
+            return dict()
+        if 'gt_pose' not in inputs or inputs['gt_pose'] is None:
+            return dict()
+
+        gt_pose_list = inputs['gt_pose']
+        if not isinstance(gt_pose_list, list) or len(gt_pose_list) == 0:
+            return dict()
+        gt_pose = gt_pose_list[0]
+        if gt_pose is None or gt_pose == []:
+            return dict()
+
+        pred_pose = output_batch[POSE_PREDICTION_KEY]  # (B, T, num_keypoints, 3)
+        B, T, num_keypoints, dims = pred_pose.shape
+
+        gt_data = gt_pose.body.data[:, 0, :, :]  # (T_gt, num_keypoints, dims)
+        if isinstance(gt_data, np.ndarray):
+            gt_data = torch.from_numpy(gt_data).to(pred_pose.device, pred_pose.dtype)
+
+        T_gt = gt_data.shape[0]
+        if T_gt != T:
+            gt_flat = gt_data.permute(1, 2, 0).reshape(1, -1, T_gt)
+            gt_flat = F.interpolate(gt_flat, size=T, mode='linear', align_corners=False)
+            gt_data = gt_flat.view(num_keypoints, dims, T).permute(2, 0, 1)
+
+        pred_pose_single = pred_pose[0]  # (T, num_keypoints, dims)
+
+        if self.pose_normalization == 'mean_std':
+            pose_mean, pose_std = self._get_pose_normalization_stats(gt_pose, pred_pose.device, pred_pose.dtype)
+            pred_pose_normalized = (pred_pose_single - pose_mean) / (pose_std + 1e-8)
+        elif self.pose_normalization == 'per_video':
+            gt_mean = gt_data.mean()
+            gt_std = gt_data.std() + 1e-8
+            pred_pose_normalized = (pred_pose_single - gt_mean) / gt_std
+        elif self.pose_normalization == 'minmax':
+            pred_pose_normalized = pred_pose_single
+        elif self.pose_normalization == 'first_frame':
+            first_mean = gt_data[0].mean()
+            first_std = gt_data[0].std() + 1e-8
+            pred_pose_normalized = (pred_pose_single - first_mean) / first_std
+        elif self.pose_normalization == 'scale_only':
+            pred_pose_normalized = pred_pose_single
+        else:
+            raise ValueError(f"Unknown pose normalization strategy: {self.pose_normalization}")
+
+        distance = torch.sqrt(torch.sum((pred_pose_normalized - gt_data) ** 2, dim=-1) + 1e-8)
+
+        weights = torch.ones(num_keypoints, device=pred_pose.device, dtype=pred_pose.dtype)
+        if num_keypoints == 543:
+            weights[33:501] = self.face_weight
+            weights[501:522] = self.hand_weight
+            weights[522:543] = self.hand_weight
+        elif num_keypoints == 178:
+            weights[8:136] = self.face_weight
+            weights[136:157] = self.hand_weight
+            weights[157:] = self.hand_weight
+
+        pose_loss = (distance * weights).mean()
+        pose_loss_weighted = self.schedule(iteration) * pose_loss
+
+        if torch.isnan(pose_loss_weighted).any():
+            raise ValueError("[POSE_PREDICTION] NaN detected in loss")
+
+        return dict(pose_prediction=pose_loss_weighted)

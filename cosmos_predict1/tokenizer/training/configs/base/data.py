@@ -24,7 +24,7 @@ Available dataloader options:
 from torch.utils.data import DataLoader
 
 from cosmos_predict1.tokenizer.training.configs.base.mock_data import get_mock_video_dataloader
-from cosmos_predict1.tokenizer.training.datasets.dataset_provider import dataset_entry
+from cosmos_predict1.tokenizer.training.datasets.dataset_provider import dataset_entry, pose_collate_fn
 from cosmos_predict1.utils.lazy_config import LazyCall
 
 DATALOADER_OPTIONS = {}
@@ -72,4 +72,5 @@ def get_video_dataloader(
         sampler=None,
         persistent_workers=is_train,
         pin_memory=True,
+        collate_fn=pose_collate_fn,
     )
