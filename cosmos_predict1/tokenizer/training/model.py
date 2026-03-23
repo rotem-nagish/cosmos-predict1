@@ -21,7 +21,7 @@ import torch
 
 from cosmos_predict1.tokenizer.training.datasets.utils import IMAGE_KEY, INPUT_KEY, MASK_KEY, RECON_KEY, VIDEO_KEY
 from cosmos_predict1.tokenizer.training.losses.continuous import RECON_CONSISTENCY_KEY, VIDEO_CONSISTENCY_LOSS
-from cosmos_predict1.utils import ema
+from cosmos_predict1.utils import ema, log
 from cosmos_predict1.utils.lazy_config import LazyDict, instantiate
 from cosmos_predict1.utils.model import Model
 
@@ -70,8 +70,36 @@ class TokenizerModel(Model):
             optimizer (torch.optim.Optimizer): The net optimizer.
             scheduler (torch.optim.lr_scheduler.LRScheduler): The net optimization scheduler.
         """
-        optimizer_config.params = self.network.parameters()
-        optimizer = instantiate(optimizer_config)
+        encoder_lr_scale = getattr(self.config, 'encoder_lr_scale', 1.0)
+
+        if encoder_lr_scale != 1.0:
+            base_lr = optimizer_config.lr
+            encoder_params = list(self.network.encoder.parameters())
+            decoder_params = list(self.network.decoder.parameters())
+
+            encoder_param_ids = {id(p) for p in encoder_params}
+            decoder_param_ids = {id(p) for p in decoder_params}
+            other_params = [p for p in self.network.parameters()
+                            if id(p) not in encoder_param_ids and id(p) not in decoder_param_ids]
+
+            param_groups = [
+                {"params": encoder_params, "lr": base_lr * encoder_lr_scale},
+                {"params": decoder_params, "lr": base_lr},
+            ]
+            if other_params:
+                param_groups.append({"params": other_params, "lr": base_lr})
+
+            log.info(f"Using separate learning rates: encoder_lr={base_lr * encoder_lr_scale:.2e}, "
+                     f"decoder_lr={base_lr:.2e}, encoder_lr_scale={encoder_lr_scale}")
+
+            optimizer_cls = optimizer_config._target_
+            optimizer_kwargs = {k: v for k, v in optimizer_config.items()
+                                if k not in ('_target_', 'params')}
+            optimizer = optimizer_cls(param_groups, **optimizer_kwargs)
+        else:
+            optimizer_config.params = self.network.parameters()
+            optimizer = instantiate(optimizer_config)
+
         scheduler_config.optimizer = optimizer
         scheduler = instantiate(scheduler_config)
 
