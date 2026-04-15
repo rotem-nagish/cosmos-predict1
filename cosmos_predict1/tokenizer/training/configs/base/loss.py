@@ -34,7 +34,6 @@ from cosmos_predict1.tokenizer.training.losses.continuous import (
     ColorLoss,
     DinoDiscLoss,
     FlowLoss,
-    HighFrequencyLoss,
     KLLoss,
     PerceptualLoss,
     TokenizerLoss,
@@ -109,13 +108,6 @@ class VideoConsistencyConfig:
 
 
 @attrs.define(slots=False)
-class HighFrequencyConfig:
-    # Laplacian-based loss to preserve high-frequency details (edges, fingers, facial features)
-    boundaries: list[int] = [0]
-    values: list[float] = [0.1]
-
-
-@attrs.define(slots=False)
 class DinoDiscConfig:
     # DINO-based discriminator adversarial loss
     boundaries: list[int] = [0]
@@ -140,7 +132,6 @@ class VideoLoss:
     perceptual: LazyDict = L(PerceptualLoss)(config=PerceptualConfig())
     flow: LazyDict = L(FlowLoss)(config=FlowConfig())
     video_consistency: LazyDict = L(VideoConsistencyLoss)(config=VideoConsistencyConfig())
-    high_frequency: LazyDict = L(HighFrequencyLoss)(config=HighFrequencyConfig())
     dino_disc: LazyDict = L(DinoDiscLoss)(config=DinoDiscConfig())
     reduce: str = ReduceMode.MEAN.value  # model.config.loss.config.reduce={'MEAN', 'SUM', 'SUM_PER_FRAME'}
 
