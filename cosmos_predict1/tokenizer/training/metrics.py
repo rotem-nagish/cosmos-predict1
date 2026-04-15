@@ -27,6 +27,7 @@ from pose_evaluation.metrics.dtw_metric import DTWDTAIImplementationDistanceMeas
 from pose_evaluation.metrics.pose_processors import *
 
 from cosmos_predict1.tokenizer.modules.utils import time2batch
+from cosmos_predict1.tokenizer.training.datasets.utils import INPUT_KEY, MASK_KEY
 from cosmos_predict1.utils import log
 from cosmos_predict1.utils.lazy_config import instantiate
 
@@ -72,20 +73,26 @@ class PSNRMetric(torch.nn.Module):
         self, inputs: dict[str, torch.Tensor], output_batch: dict[str, torch.Tensor], iteration: int
     ) -> dict[str, torch.Tensor]:
         reconstructions = output_batch[_RECONSTRUCTION]
-        if inputs.ndim == 5:
-            inputs, _ = time2batch(inputs)
+        input_images = inputs[INPUT_KEY]
+        weights = inputs[MASK_KEY]
+
+        if input_images.ndim == 5:
+            input_images, _ = time2batch(input_images)
             reconstructions, _ = time2batch(reconstructions)
+            weights, _ = time2batch(weights)
 
         # Normalize to uint8 [0..255] range.
-        true_image = (inputs.to(torch.float32) + 1) / 2
+        true_image = (input_images.to(torch.float32) + 1) / 2
         pred_image = (reconstructions.to(torch.float32) + 1) / 2
         true_image = (true_image * _UINT8_MAX_F + 0.5).to(torch.uint8)
         pred_image = (pred_image * _UINT8_MAX_F + 0.5).to(torch.uint8)
 
-        # Calculate PNSR, based on Mean Squared Error (MSE)
+        # Calculate PSNR using masked MSE over interest regions (mask > 0.2)
         true_image = true_image.to(torch.float32)
         pred_image = pred_image.to(torch.float32)
-        mse = torch.mean((true_image - pred_image) ** 2, dim=(1, 2, 3))
+        weights_binary = (weights > 0.2).float()
+        squared_error = (true_image - pred_image) ** 2
+        mse = (squared_error * weights_binary).sum(dim=(1, 2, 3)) / (weights_binary.sum(dim=(1, 2, 3)) + _FLOAT32_EPS)
         psnr = 10 * torch.log10(_UINT8_MAX_F**2 / (mse + _FLOAT32_EPS))
         return dict(PSNR=torch.mean(psnr))
 
@@ -98,12 +105,16 @@ class SSIMMetric(torch.nn.Module):
         self, inputs: dict[str, torch.Tensor], output_batch: dict[str, torch.Tensor], iteration: int
     ) -> dict[str, torch.Tensor]:
         reconstructions = output_batch[_RECONSTRUCTION]
-        if inputs.ndim == 5:
-            inputs, _ = time2batch(inputs)
+        input_images = inputs[INPUT_KEY]
+        weights = inputs[MASK_KEY]
+
+        if input_images.ndim == 5:
+            input_images, _ = time2batch(input_images)
             reconstructions, _ = time2batch(reconstructions)
+            weights, _ = time2batch(weights)
 
         # Normalize to uint8 [0..255] range.
-        true_image = (inputs.to(torch.float32) + 1) / 2
+        true_image = (input_images.to(torch.float32) + 1) / 2
         pred_image = (reconstructions.to(torch.float32) + 1) / 2
         true_image = (true_image * _UINT8_MAX_F + 0.5).to(torch.uint8)
         pred_image = (pred_image * _UINT8_MAX_F + 0.5).to(torch.uint8)
@@ -111,14 +122,26 @@ class SSIMMetric(torch.nn.Module):
         # Move tensors to CPU and convert to numpy arrays
         true_image_np = true_image.permute(0, 2, 3, 1).cpu().numpy()
         pred_image_np = pred_image.permute(0, 2, 3, 1).cpu().numpy()
+        weights_np = weights.to(torch.float32).permute(0, 2, 3, 1).cpu().numpy()
 
-        # Calculate SSIM for each image in the batch and average over the batch
+        # Calculate masked SSIM for each image in the batch
         ssim_values = []
-        for true_image_i, pred_image_i in zip(true_image_np, pred_image_np):
-            ssim_value = ssim(true_image_i, pred_image_i, data_range=_UINT8_MAX_F, multichannel=True, channel_axis=-1)
-            ssim_values.append(ssim_value)
-        ssim_mean = np.mean(ssim_values)
-        return dict(SSIM=torch.tensor(ssim_mean, dtype=torch.float32, device=inputs.device))
+        for true_img, pred_img, weight_mask in zip(true_image_np, pred_image_np, weights_np):
+            ssim_map = ssim(
+                true_img, pred_img,
+                data_range=_UINT8_MAX_F,
+                multichannel=True,
+                channel_axis=-1,
+                full=True,
+            )[1]  # full SSIM map, shape (H, W, C)
+            ssim_map_2d = ssim_map.mean(axis=-1)  # (H, W)
+            mask_2d = (weight_mask[..., 0] > 0.2).astype(np.float32)
+            mask_sum = mask_2d.sum()
+            if mask_sum > 0:
+                ssim_values.append((ssim_map_2d * mask_2d).sum() / mask_sum)
+
+        ssim_mean = np.mean(ssim_values) if ssim_values else 0.0
+        return dict(SSIM=torch.tensor(ssim_mean, dtype=torch.float32, device=input_images.device))
 
 
 class CodeUsageMetric(torch.nn.Module):
