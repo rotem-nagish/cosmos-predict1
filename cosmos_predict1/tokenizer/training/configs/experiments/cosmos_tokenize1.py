@@ -61,9 +61,9 @@ Cosmos_Tokenize1_CV8x8x8_720p_SL_ft: LazyDict = LazyDict(
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-CV8x8x8-720p/model.pt",
-            strict_resume=True,
+            strict_resume=False,
             load_training_state=True,
-            jit=dict(input_shape=[1, 3, 17, 512, 512]),
+            jit=dict(enabled=False),
         ),
     )
 )
@@ -112,9 +112,9 @@ Cosmos_Tokenize1_DV8x16x16_720p_SL_ft: LazyDict = LazyDict(
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-DV8x16x16-720p/model.pt",
-            strict_resume=True,
+            strict_resume=False,
             load_training_state=False,
-            jit=dict(input_shape=[1, 3, 17, 512, 512]),
+            jit=dict(enabled=False),
         ),
     )
 )
@@ -161,9 +161,9 @@ Cosmos_Tokenize1_CV4x8x8_360p_SL_ft: LazyDict = LazyDict(
         ),
         checkpoint=dict(
             load_path="/home/rotem/cosmos-predict1/checkpoints/Cosmos-Tokenize1-CV4x8x8-360p/model.pt",
-            strict_resume=True,
+            strict_resume=False,
             load_training_state=False,
-            jit=dict(input_shape=[1, 3, 17, 512, 512]),
+            jit=dict(enabled=False),
         ),
     )
 )
@@ -212,9 +212,9 @@ Cosmos_Tokenize1_DV4x8x8_360p_SL_ft: LazyDict = LazyDict(
         ),
         checkpoint=dict(
             load_path="checkpoints/Cosmos-Tokenize1-DV4x8x8-360p/model.pt",
-            strict_resume=True,
+            strict_resume=False,
             load_training_state=False,
-            jit=dict(input_shape=[1, 3, 17, 512, 512]),
+            jit=dict(enabled=False),
         ),
     )
 )

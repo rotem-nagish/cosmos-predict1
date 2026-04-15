@@ -51,7 +51,7 @@ def pose_collate_fn(batch):
 
 _VIDEO_PATTERN_DICT = {
     "hdvila_video": "datasets/hdvila/videos/*.mp4",
-    "sl_ft_video": "/home/rotem/sign/data/*/*/*.mp4"
+    "sl_ft_video": "/home/rotem/sign/data/*/*.mp4"
 }
 
 

@@ -136,6 +136,7 @@ class Dataset(Dataset):
         elapsed = time.time() - t0
         print(f"[rank 0] Size-filter done in {elapsed:.1f}s: {len(valid)} valid, {len(bad)} tiny/missing")
 
+        os.makedirs(os.path.dirname(valid_cache), exist_ok=True)
         with open(valid_cache, 'w') as f:
             f.write('\n'.join(valid))
         if bad:
