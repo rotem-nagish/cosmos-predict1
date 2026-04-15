@@ -254,6 +254,7 @@ class FrozenDINOSmallNoDrop(nn.Module):
             SABlockNoDrop(block_idx=i, embed_dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, norm_eps=norm_eps)
             for i in range(max(depth, 1 + max(self.key_depths)))
         ])
+        self.norm = nn.LayerNorm(embed_dim, eps=norm_eps)  # not used in forward, but needed for checkpoint loading
 
         self.eval()
         for p in self.parameters():
