@@ -27,6 +27,12 @@ from cosmos_predict1.utils.config import Config
 from cosmos_predict1.utils.model import Model
 from cosmos_predict1.utils.trainer import Trainer
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 _UINT8_MAX_F = float(np.iinfo(np.uint8).max)
 _VIDEO_CONSISTENCY_LOSS = "video_consistency"
 
@@ -126,6 +132,7 @@ class GradClipCallback(callback.GradClipCallback):
     def __init__(self, grad_clip_norm: float, config: Config, trainer: Trainer, verbose: bool):
         super().__init__(config, trainer, grad_clip_norm)
         self.verbose = verbose
+        self.last_grad_norm = None
 
     def on_before_optimizer_step(
         self,
@@ -138,6 +145,9 @@ class GradClipCallback(callback.GradClipCallback):
         grad_scaler.unscale_(optimizer)
         model_to_clip = model_ddp.module if hasattr(model_ddp, "module") else model_ddp
         total_norm = torch.nn.utils.clip_grad_norm_(model_to_clip.parameters(), max_norm=self.grad_clip_norm)
+
+        # Store the gradient norm for logging
+        self.last_grad_norm = total_norm.item()
 
         if torch.isnan(total_norm):
             raise ValueError("[gradient clipping] NaN detected in gradient norms")
@@ -252,3 +262,173 @@ class TorchCompile(callback.Callback):
                         else:
                             log.info(f"Compiling loss with key: {key}")
                             model.loss.loss_modules[key].torch_compile()
+
+
+class WandBLoggerCallback(callback.Callback):
+    """Callback for logging metrics to Weights & Biases (wandb)."""
+
+    def __init__(
+        self,
+        project: Optional[str] = None,
+        entity: Optional[str] = None,
+        name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        log_interval: int = 100,
+        config: Optional[Config] = None,
+        trainer: Optional[Trainer] = None,
+    ):
+        """
+        Initialize the WandB logger callback.
+
+        Args:
+            project (str): WandB project name. If None, uses config.job.name
+            entity (str): WandB entity/team name
+            name (str): WandB run name. If None, uses f"run_{config.job.name}"
+            api_key (str): WandB API key for authentication. If None, uses WANDB_API_KEY env var
+            log_interval (int): Log metrics every N iterations
+            config (Config): Training configuration
+            trainer (Trainer): Trainer instance
+        """
+        super().__init__(config, trainer)
+        self.project = project
+        self.entity = entity
+        self.name = name
+        self.api_key = api_key
+        self.log_interval = log_interval
+        self.wandb_initialized = False
+
+        if not WANDB_AVAILABLE:
+            log.warning("wandb is not installed. WandBLoggerCallback will be disabled.")
+
+    @distributed.rank0_only
+    def on_train_start(self, model: Model, iteration: int = 0) -> None:
+        """Initialize wandb run at the start of training."""
+        if not WANDB_AVAILABLE:
+            return
+
+        # Login to wandb if API key is provided
+        if self.api_key:
+            try:
+                wandb.login(key=self.api_key)
+                log.info("WandB login successful")
+            except Exception as e:
+                log.error(f"Failed to login to wandb: {e}")
+                self.wandb_initialized = False
+                return
+
+        # Use experiment name (job.name) as wandb project
+        # Use a timestamp or custom name for the run name
+        project = self.project if self.project else self.config.job.name
+        name = self.name if self.name else self.config.job.name
+
+        try:
+            # Initialize wandb
+            wandb.init(
+                project=project,
+                entity=self.entity,
+                name=name,
+                config={
+                    "max_iter": self.config.trainer.max_iter,
+                    "seed": self.config.trainer.seed,
+                    "validation_iter": self.config.trainer.validation_iter,
+                    "logging_iter": self.config.trainer.logging_iter,
+                    "job_project": self.config.job.project,
+                    "job_group": self.config.job.group,
+                    "job_name": self.config.job.name,
+                },
+                resume="allow",
+            )
+            self.wandb_initialized = True
+            log.info(f"WandB initialized: project={project}, name={name}")
+        except Exception as e:
+            log.error(f"Failed to initialize wandb: {e}")
+            self.wandb_initialized = False
+
+    @distributed.rank0_only
+    def on_training_step_end(
+        self,
+        model: Model,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        """Log training metrics to wandb."""
+        if not WANDB_AVAILABLE or not self.wandb_initialized:
+            return
+
+        if iteration % self.log_interval != 0:
+            return
+
+        try:
+            # Prepare metrics to log
+            metrics = {
+                "train/loss": loss.item(),
+                "train/iteration": iteration,
+            }
+
+            # Log individual loss components if available in output_batch
+            if isinstance(output_batch, dict):
+                for key, value in output_batch.get("loss", {}).items():
+                    metrics[f"train/{key}"] = value.item()
+
+            # Log learning rate if available
+            if hasattr(self.trainer, "scheduler") and self.trainer.scheduler is not None:
+                lr = self.trainer.scheduler.get_last_lr()[0]
+                metrics["train/learning_rate"] = lr
+
+            # Log gradient norm if available from GradClipCallback
+            if hasattr(self.trainer, "callbacks") and hasattr(self.trainer.callbacks, "callbacks"):
+                for callback_name, callback_obj in self.trainer.callbacks.callbacks.items():
+                    if isinstance(callback_obj, GradClipCallback) and callback_obj.last_grad_norm is not None:
+                        metrics["train/grad_norm"] = callback_obj.last_grad_norm
+                        break
+
+            wandb.log(metrics, step=iteration)
+
+        except Exception as e:
+            log.warning(f"Failed to log to wandb at iteration {iteration}: {e}")
+
+    @distributed.rank0_only
+    def on_validation_step_end(
+        self,
+        model: Model,
+        data_batch: dict[str, torch.Tensor],
+        output_batch: dict[str, torch.Tensor],
+        loss: torch.Tensor,
+        iteration: int = 0,
+    ) -> None:
+        """Log validation metrics to wandb."""
+        if not WANDB_AVAILABLE or not self.wandb_initialized:
+            return
+
+        try:
+            # Prepare validation metrics to log
+            metrics = {
+                "val/loss": loss.item(),
+            }
+
+            # Log losses, metrics (PSNR, SSIM, CodeUsage, etc.)
+            if isinstance(output_batch, dict):
+                for key, value in output_batch.items():
+                    if not isinstance(value, dict):
+                        continue
+                    for k, v in value.items():
+                        metrics[f"val/{k}"] = v.item()
+
+            wandb.log(metrics, step=iteration)
+
+        except Exception as e:
+            log.warning(f"Failed to log validation metrics to wandb at iteration {iteration}: {e}")
+
+    @distributed.rank0_only
+    def on_train_end(self, model: Model, iteration: int = 0) -> None:
+        """Finish wandb run at the end of training."""
+        if not WANDB_AVAILABLE or not self.wandb_initialized:
+            return
+
+        try:
+            wandb.finish()
+            log.info("WandB run finished")
+        except Exception as e:
+            log.warning(f"Failed to finish wandb run: {e}")
