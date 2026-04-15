@@ -36,6 +36,7 @@ from cosmos_predict1.tokenizer.training.losses.continuous import (
     HighFrequencyLoss,
     KLLoss,
     PerceptualLoss,
+    PosePredictionLoss,
     TokenizerLoss,
     VideoConsistencyLoss,
 )
@@ -108,6 +109,15 @@ class VideoConsistencyConfig:
 
 
 @attrs.define(slots=False)
+class PosePredictionConfig:
+    boundaries: list[int] = [0]
+    values: list[float] = [1.0]
+    hand_weight: float = 2.0
+    face_weight: float = 1.5
+    pose_normalization: str = 'mean_std'
+
+
+@attrs.define(slots=False)
 class HighFrequencyConfig:
     # Laplacian-based loss to preserve high-frequency details (edges, fingers, facial features)
     boundaries: list[int] = [0]
@@ -122,6 +132,7 @@ class VideoLoss:
     perceptual: LazyDict = L(PerceptualLoss)(config=PerceptualConfig())
     flow: LazyDict = L(FlowLoss)(config=FlowConfig())
     video_consistency: LazyDict = L(VideoConsistencyLoss)(config=VideoConsistencyConfig())
+    pose_prediction: LazyDict = L(PosePredictionLoss)(config=PosePredictionConfig())
     high_frequency: LazyDict = L(HighFrequencyLoss)(config=HighFrequencyConfig())
     reduce: str = ReduceMode.MEAN.value  # model.config.loss.config.reduce={'MEAN', 'SUM', 'SUM_PER_FRAME'}
 
