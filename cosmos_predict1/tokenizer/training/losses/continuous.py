@@ -29,7 +29,7 @@ from cosmos_predict1.tokenizer.training.losses import ReduceMode
 from cosmos_predict1.tokenizer.training.losses.lpips import LPIPS
 from cosmos_predict1.utils.lazy_config import instantiate
 
-_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency", "pose_prediction"]
+_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency", "pose_prediction", "weighted_entropy", "token_ablation"]
 POSE_PREDICTION_KEY = "pose_prediction"
 VIDEO_CONSISTENCY_LOSS = "video_consistency"
 RECON_CONSISTENCY_KEY = f"{RECON_KEY}_consistency"
@@ -578,3 +578,104 @@ class PosePredictionLoss(torch.nn.Module):
             raise ValueError("[POSE_PREDICTION] NaN detected in loss")
 
         return dict(pose_prediction=pose_loss_weighted)
+
+
+class WeightedEntropyLoss(torch.nn.Module):
+    """
+    Weighted entropy loss on pre-quantization latent codes to encourage low entropy
+    in background regions.
+
+    Penalizes high variance/entropy in background regions (1 - mask), encouraging the
+    model to use simple, predictable codes for non-sign content (black boxes, static
+    backgrounds), while foreground (sign content) can have complex, high-entropy codes.
+    """
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.schedule = WeightScheduler(boundaries=config.boundaries, values=config.values)
+        self.entropy_type = getattr(config, 'entropy_type', 'variance')
+        self.temperature = getattr(config, 'temperature', 1.0)
+
+    def compute_variance_entropy(self, latent: torch.Tensor) -> torch.Tensor:
+        """Variance across channels as entropy proxy. Returns (B, 1, T, H, W)."""
+        return torch.var(latent, dim=1, keepdim=True)
+
+    def compute_softmax_entropy(self, latent: torch.Tensor) -> torch.Tensor:
+        """Entropy from treating channel activations as logits. Returns (B, 1, T, H, W)."""
+        B, C, T, H, W = latent.shape
+        latent_flat = latent.permute(0, 2, 3, 4, 1).reshape(-1, C)
+        probs = F.softmax(latent_flat / self.temperature, dim=1)
+        entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1)
+        return entropy.view(B, T, H, W).unsqueeze(1)
+
+    def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
+        if LATENT_KEY not in output_batch:
+            return dict()
+
+        latent = output_batch[LATENT_KEY]
+        weights = inputs[MASK_KEY]
+
+        if weights.shape[1] > 1:
+            weights = weights[:, :1, ...]
+
+        # Invert mask: 1 for background, 0 for foreground
+        background_mask = 1.0 - weights
+
+        if self.entropy_type == 'softmax':
+            entropy = self.compute_softmax_entropy(latent)
+        else:
+            entropy = self.compute_variance_entropy(latent)
+
+        # Downsample mask to match latent spatial/temporal dimensions
+        if background_mask.shape != entropy.shape:
+            _, _, T_latent, H_latent, W_latent = entropy.shape
+            background_mask = F.interpolate(
+                background_mask,
+                size=(T_latent, H_latent, W_latent),
+                mode='trilinear',
+                align_corners=False,
+            )
+
+        masked_entropy = (entropy * background_mask).sum() / (background_mask.sum() + 1e-8)
+        weighted_loss = self.schedule(iteration) * masked_entropy
+
+        if torch.isnan(weighted_loss).any():
+            raise ValueError("[WEIGHTED_ENTROPY] NaN detected in loss")
+
+        return dict(weighted_entropy=weighted_loss)
+
+
+class TokenAblationLoss(torch.nn.Module):
+    """
+    Token ablation (marginal utility) loss for background regions.
+
+    Measures whether background tokens are harmful by comparing reconstruction
+    quality with original vs ablated (mean-replaced) background codes.
+    Penalizes only when ablation improves reconstruction (i.e. background tokens
+    were actively hurting quality).
+
+    Requires 'ablated_recon' in output_batch (computed in model forward).
+    """
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.schedule = WeightScheduler(boundaries=config.boundaries, values=config.values)
+
+    def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
+        if 'ablated_recon' not in output_batch or RECON_KEY not in output_batch:
+            return dict()
+
+        original_recon = output_batch[RECON_KEY]
+        ablated_recon = output_batch['ablated_recon']
+        input_images = inputs[INPUT_KEY]
+
+        original_mse = torch.mean((input_images - original_recon) ** 2)
+        ablated_mse = torch.mean((input_images - ablated_recon) ** 2)
+
+        # Penalize only if ablation improves (original_mse > ablated_mse)
+        mse_delta = torch.relu(original_mse - ablated_mse)
+
+        weighted_loss = self.schedule(iteration) * mse_delta
+
+        if torch.isnan(weighted_loss).any():
+            raise ValueError("[TOKEN_ABLATION] NaN detected in loss")
+
+        return dict(token_ablation=weighted_loss)

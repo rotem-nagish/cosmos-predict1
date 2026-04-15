@@ -36,8 +36,10 @@ from cosmos_predict1.tokenizer.training.losses.continuous import (
     HighFrequencyLoss,
     KLLoss,
     PerceptualLoss,
+    TokenAblationLoss,
     TokenizerLoss,
     VideoConsistencyLoss,
+    WeightedEntropyLoss,
 )
 from cosmos_predict1.utils.lazy_config import LazyCall as L
 from cosmos_predict1.utils.lazy_config import LazyDict
@@ -115,6 +117,22 @@ class HighFrequencyConfig:
 
 
 @attrs.define(slots=False)
+class WeightedEntropyConfig:
+    # Penalize high entropy in background latent codes
+    boundaries: list[int] = [0]
+    values: list[float] = [0.0]  # Disabled by default
+    entropy_type: str = 'variance'  # 'variance' or 'softmax'
+    temperature: float = 1.0  # Temperature for softmax entropy
+
+
+@attrs.define(slots=False)
+class TokenAblationConfig:
+    # Penalize when background tokens hurt reconstruction quality
+    boundaries: list[int] = [0]
+    values: list[float] = [0.0]  # Disabled by default
+
+
+@attrs.define(slots=False)
 class VideoLoss:
     # The combined loss function, and its reduction mode.
     color: LazyDict = L(ColorLoss)(config=ColorConfig())
@@ -123,6 +141,8 @@ class VideoLoss:
     flow: LazyDict = L(FlowLoss)(config=FlowConfig())
     video_consistency: LazyDict = L(VideoConsistencyLoss)(config=VideoConsistencyConfig())
     high_frequency: LazyDict = L(HighFrequencyLoss)(config=HighFrequencyConfig())
+    weighted_entropy: LazyDict = L(WeightedEntropyLoss)(config=WeightedEntropyConfig())
+    token_ablation: LazyDict = L(TokenAblationLoss)(config=TokenAblationConfig())
     reduce: str = ReduceMode.MEAN.value  # model.config.loss.config.reduce={'MEAN', 'SUM', 'SUM_PER_FRAME'}
 
 
