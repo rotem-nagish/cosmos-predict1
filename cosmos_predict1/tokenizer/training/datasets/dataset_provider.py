@@ -102,6 +102,9 @@ def dataset_entry(
     resolution="720",
     crop_height=256,
     num_video_frames=25,
+    pose_normalization='mean_std',
+    limit=None,
+    mask_type='bb',
 ) -> AugmentDataset:
     if dataset_type != "video":
         raise ValueError(f"Dataset type {dataset_type} is not supported")
@@ -110,6 +113,9 @@ def dataset_entry(
     base_dataset = Dataset(
         video_pattern=_VIDEO_PATTERN_DICT[dataset_name.lower()],
         num_video_frames=num_video_frames,
+        pose_normalization=pose_normalization,
+        limit=limit,
+        mask_type=mask_type,
     )
 
     # Pick the training or validation augmentations
