@@ -111,13 +111,16 @@ class Patcher(torch.nn.Module):
 class Patcher3D(Patcher):
     """A 3D discrete wavelet transform for video data, expects 5D tensor, i.e. a batch of videos."""
 
-    def __init__(self, patch_size=1, patch_method="haar"):
+    def __init__(self, patch_size=1, patch_method="haar", freq_weights=None):
         super().__init__(patch_method=patch_method, patch_size=patch_size)
         self.register_buffer(
             "patch_size_buffer",
             patch_size * torch.ones([1], dtype=torch.int32),
             persistent=_PERSISTENT,
         )
+        if freq_weights is not None:
+            freq_weights = torch.tensor(freq_weights, dtype=torch.float32)
+        self.register_buffer("freq_weights", freq_weights, persistent=True)
 
     def _dwt(self, x, wavelet, mode="reflect", rescale=False):
         dtype = x.dtype
@@ -153,7 +156,18 @@ class Patcher3D(Patcher):
         out = torch.cat([xlll, xllh, xlhl, xlhh, xhll, xhlh, xhhl, xhhh], dim=1)
         if rescale:
             out = out / (2 * torch.sqrt(torch.tensor(2.0)))
+
+        if self.freq_weights is not None:
+            out = self._reweight_dwt(out)
+
         return out
+
+    def _reweight_dwt(self, out):
+        B, C8, T, H, W = out.shape
+        out = out.view(B, 8, C8 // 8, T, H, W)
+        weights = self.freq_weights.view(1, 8, 1, 1, 1, 1)
+        out = out * weights
+        return out.view(B, C8, T, H, W)
 
     def _haar(self, x):
         xi, xv = torch.split(x, [1, x.shape[2] - 1], dim=2)
@@ -176,7 +190,7 @@ class Patcher3D(Patcher):
 
 
 class UnPatcher(torch.nn.Module):
-    """A module to convert patches into image tensorsusing torch operations.
+    """A module to convert patches into image tensors using torch operations.
 
     The main difference from `class Unpatching` is that this module implements
     all operations using torch, rather than python or numpy, for efficiency purpose.

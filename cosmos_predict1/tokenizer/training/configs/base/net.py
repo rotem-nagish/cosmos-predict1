@@ -129,6 +129,9 @@ CausalContinuousFactorizedVideoTokenizerConfig: LazyDict = L(CausalContinuousVid
     resolution=1024,
     patch_size=4,
     patch_method="haar",
+    # Frequency weights for 3D DWT bands (8 bands: LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH).
+    # None = no reweighting. Example: [0.565, 0.847, 0.847, 1.129, 0.847, 1.129, 1.129, 1.506]
+    freq_weights=None,
     latent_channels=16,
     z_channels=16,
     z_factor=1,
@@ -163,6 +166,9 @@ CausalDiscreteFactorizedVideoTokenizerConfig: LazyDict = L(CausalDiscreteVideoTo
     resolution=1024,
     patch_size=4,
     patch_method="haar",
+    # Frequency weights for 3D DWT bands (8 bands: LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH).
+    # None = no reweighting. Example: [0.565, 0.847, 0.847, 1.129, 0.847, 1.129, 1.129, 1.506]
+    freq_weights=None,
     # The encoder output channels just before quantization is changed to 256
     # from 16 (old versions). It aligns with the DI that uses 256 channels,
     # making initialization from image tokenizers easier.

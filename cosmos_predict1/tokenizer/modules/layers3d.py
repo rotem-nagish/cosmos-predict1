@@ -687,7 +687,8 @@ class EncoderFactorized(nn.Module):
 
         # Patcher.
         patch_size = ignore_kwargs.get("patch_size", 1)
-        self.patcher3d = Patcher3D(patch_size, ignore_kwargs.get("patch_method", "rearrange"))
+        self.patcher3d = Patcher3D(patch_size, ignore_kwargs.get("patch_method", "rearrange"),
+                                    freq_weights=ignore_kwargs.get("freq_weights", None))
         in_channels = in_channels * patch_size * patch_size * patch_size
 
         # calculate the number of downsample operations
