@@ -597,50 +597,36 @@ class DinoDiscLoss(torch.nn.Module):
         super().__init__()
         self.schedule = WeightScheduler(boundaries=config.boundaries, values=config.values)
         self.enabled = getattr(config, 'enabled', False)
-        self.dino_ckpt_path = getattr(config, 'dino_ckpt_path',
-                                      'https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth')
-        self.ks = getattr(config, 'kernel_size', 9)
-        self.depth = getattr(config, 'depth', 12)
-        self.key_depths = tuple(getattr(config, 'key_depths', [2, 5, 8, 11]))
-        self.norm_type = getattr(config, 'norm_type', 'sbn')
-        self.using_spec_norm = getattr(config, 'using_spec_norm', True)
-        self.norm_eps = getattr(config, 'norm_eps', 1e-6)
         self.grad_ckpt = getattr(config, 'grad_ckpt', False)
-        self.loss_type = getattr(config, 'loss_type', 'hinge')  # 'hinge', 'non_saturating', or 'least_squares'
+        self.loss_type = getattr(config, 'loss_type', 'hinge')
 
-        # Initialize discriminator if enabled
         if self.enabled:
             self.discriminator = DinoDisc(
-                dino_ckpt_path=self.dino_ckpt_path,
-                device='cuda' if torch.cuda.is_available() else 'cpu',
-                ks=self.ks,
-                depth=self.depth,
-                key_depths=self.key_depths,
-                norm_type=self.norm_type,
-                using_spec_norm=self.using_spec_norm,
-                norm_eps=self.norm_eps,
+                dino_ckpt_path=getattr(config, 'dino_ckpt_path',
+                                       'https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth'),
+                ks=getattr(config, 'kernel_size', 9),
+                depth=getattr(config, 'depth', 12),
+                key_depths=tuple(getattr(config, 'key_depths', [2, 5, 8, 11])),
+                norm_type=getattr(config, 'norm_type', 'sbn'),
+                using_spec_norm=getattr(config, 'using_spec_norm', True),
+                norm_eps=getattr(config, 'norm_eps', 1e-6),
             )
-            # Discriminator heads are trainable, DINO backbone is frozen
             self.discriminator.dino_proxy.requires_grad_(False)
             self.discriminator.heads.requires_grad_(True)
+
+    @staticmethod
+    def _to_2d(x: torch.Tensor) -> torch.Tensor:
+        """Reshape (B, C, T, H, W) video to (B*T, C, H, W) frames."""
+        if x.ndim == 5:
+            B, C, T, H, W = x.shape
+            return x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+        return x
 
     def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
         if not self.enabled or self.schedule(iteration) == 0.0:
             return dict()
 
-        reconstructions = output_batch[RECON_KEY]
-        input_images = inputs[INPUT_KEY]
-
-        # Handle video inputs (B, C, T, H, W) by processing frame-by-frame
-        if input_images.ndim == 5:
-            B, C, T, H, W = input_images.shape
-            # Reshape to (B*T, C, H, W)
-            reconstructions_2d = reconstructions.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
-        else:
-            reconstructions_2d = reconstructions
-
-        # Get discriminator predictions for reconstructions
-        # The discriminator outputs logits for each feature map position
+        reconstructions_2d = self._to_2d(output_batch[RECON_KEY])
         fake_logits = self.discriminator(reconstructions_2d, grad_ckpt=self.grad_ckpt)
 
         # Compute generator loss based on loss type
@@ -665,43 +651,23 @@ class DinoDiscLoss(torch.nn.Module):
         return dict(dino_disc=gen_loss_weighted)
 
     def discriminator_loss(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
-        """
-        Compute discriminator loss (for updating discriminator parameters separately).
-        This should be called in a separate training step if using alternating optimization.
-
-        Returns:
-            Dict with 'disc_real', 'disc_fake', and 'disc_total' losses
-        """
+        """Compute discriminator loss (for separate discriminator update step)."""
         if not self.enabled or self.schedule(iteration) == 0.0:
             return dict()
 
-        reconstructions = output_batch[RECON_KEY].detach()  # Detach to not update generator
-        input_images = inputs[INPUT_KEY]
+        real_2d = self._to_2d(inputs[INPUT_KEY])
+        fake_2d = self._to_2d(output_batch[RECON_KEY].detach())
 
-        # Handle video inputs
-        if input_images.ndim == 5:
-            B, C, T, H, W = input_images.shape
-            input_images_2d = input_images.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
-            reconstructions_2d = reconstructions.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
-        else:
-            input_images_2d = input_images
-            reconstructions_2d = reconstructions
+        real_logits = self.discriminator(real_2d, grad_ckpt=self.grad_ckpt)
+        fake_logits = self.discriminator(fake_2d, grad_ckpt=self.grad_ckpt)
 
-        # Get discriminator predictions
-        real_logits = self.discriminator(input_images_2d, grad_ckpt=self.grad_ckpt)
-        fake_logits = self.discriminator(reconstructions_2d, grad_ckpt=self.grad_ckpt)
-
-        # Compute discriminator loss based on loss type
         if self.loss_type == 'hinge':
-            # Hinge loss: L_D = E[ReLU(1 - D(x))] + E[ReLU(1 + D(G(z)))]
             disc_loss_real = torch.mean(F.relu(1.0 - real_logits))
             disc_loss_fake = torch.mean(F.relu(1.0 + fake_logits))
         elif self.loss_type == 'non_saturating':
-            # Standard GAN loss: L_D = -E[log(D(x))] - E[log(1 - D(G(z)))]
             disc_loss_real = F.softplus(-real_logits).mean()
             disc_loss_fake = F.softplus(fake_logits).mean()
         elif self.loss_type == 'least_squares':
-            # Least squares GAN loss: L_D = E[(D(x) - 1)^2] + E[D(G(z))^2]
             disc_loss_real = torch.mean((real_logits - 1) ** 2)
             disc_loss_fake = torch.mean(fake_logits ** 2)
         else:
@@ -715,5 +681,5 @@ class DinoDiscLoss(torch.nn.Module):
         return dict(
             disc_real=disc_loss_real,
             disc_fake=disc_loss_fake,
-            disc_total=disc_loss_total
+            disc_total=disc_loss_total,
         )

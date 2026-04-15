@@ -125,7 +125,7 @@ class DinoDiscConfig:
     kernel_size: int = 9  # Kernel size for discriminator conv layers
     depth: int = 12  # Number of DINO transformer blocks
     key_depths: list[int] = attrs.field(factory=lambda: [2, 5, 8, 11])  # Layers to extract features from
-    norm_type: str = 'sbn'  # Normalization type: 'bn', 'sbn', 'lbn', 'hbn', 'gn'
+    norm_type: str = 'sbn'  # Normalization type: 'bn', 'sbn', 'gn'
     using_spec_norm: bool = True  # Whether to use spectral normalization
     norm_eps: float = 1e-6  # Epsilon for normalization layers
     grad_ckpt: bool = False  # Whether to use gradient checkpointing
