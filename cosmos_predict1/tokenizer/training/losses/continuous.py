@@ -26,10 +26,11 @@ from pose_format import Pose
 from cosmos_predict1.tokenizer.modules.utils import batch2time, time2batch
 from cosmos_predict1.tokenizer.training.datasets.utils import INPUT_KEY, LATENT_KEY, MASK_KEY, RECON_KEY
 from cosmos_predict1.tokenizer.training.losses import ReduceMode
+from cosmos_predict1.tokenizer.training.losses.discriminators import DinoDisc
 from cosmos_predict1.tokenizer.training.losses.lpips import LPIPS
 from cosmos_predict1.utils.lazy_config import instantiate
 
-_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency", "pose_prediction"]
+_VALID_LOSS_NAMES = ["color", "perceptual", "flow", "kl", "video_consistency", "pose_prediction", "dino_disc"]
 POSE_PREDICTION_KEY = "pose_prediction"
 VIDEO_CONSISTENCY_LOSS = "video_consistency"
 RECON_CONSISTENCY_KEY = f"{RECON_KEY}_consistency"
@@ -578,3 +579,141 @@ class PosePredictionLoss(torch.nn.Module):
             raise ValueError("[POSE_PREDICTION] NaN detected in loss")
 
         return dict(pose_prediction=pose_loss_weighted)
+
+
+class DinoDiscLoss(torch.nn.Module):
+    """
+    DINO-based discriminator adversarial loss for the generator (tokenizer).
+
+    This loss uses a frozen DINO ViT backbone with trainable discriminator heads
+    to distinguish between real and reconstructed images. The generator (tokenizer)
+    is trained to fool the discriminator by making reconstructions look more realistic.
+
+    The discriminator extracts features from multiple layers of DINO and applies
+    learned heads to produce real/fake predictions. The generator loss encourages
+    the discriminator to output high scores (predicting "real") for reconstructions.
+    """
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.schedule = WeightScheduler(boundaries=config.boundaries, values=config.values)
+        self.enabled = getattr(config, 'enabled', False)
+        self.dino_ckpt_path = getattr(config, 'dino_ckpt_path',
+                                      'https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth')
+        self.ks = getattr(config, 'kernel_size', 9)
+        self.depth = getattr(config, 'depth', 12)
+        self.key_depths = tuple(getattr(config, 'key_depths', [2, 5, 8, 11]))
+        self.norm_type = getattr(config, 'norm_type', 'sbn')
+        self.using_spec_norm = getattr(config, 'using_spec_norm', True)
+        self.norm_eps = getattr(config, 'norm_eps', 1e-6)
+        self.grad_ckpt = getattr(config, 'grad_ckpt', False)
+        self.loss_type = getattr(config, 'loss_type', 'hinge')  # 'hinge', 'non_saturating', or 'least_squares'
+
+        # Initialize discriminator if enabled
+        if self.enabled:
+            self.discriminator = DinoDisc(
+                dino_ckpt_path=self.dino_ckpt_path,
+                device='cuda' if torch.cuda.is_available() else 'cpu',
+                ks=self.ks,
+                depth=self.depth,
+                key_depths=self.key_depths,
+                norm_type=self.norm_type,
+                using_spec_norm=self.using_spec_norm,
+                norm_eps=self.norm_eps,
+            )
+            # Discriminator heads are trainable, DINO backbone is frozen
+            self.discriminator.dino_proxy.requires_grad_(False)
+            self.discriminator.heads.requires_grad_(True)
+
+    def forward(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
+        if not self.enabled or self.schedule(iteration) == 0.0:
+            return dict()
+
+        reconstructions = output_batch[RECON_KEY]
+        input_images = inputs[INPUT_KEY]
+
+        # Handle video inputs (B, C, T, H, W) by processing frame-by-frame
+        if input_images.ndim == 5:
+            B, C, T, H, W = input_images.shape
+            # Reshape to (B*T, C, H, W)
+            reconstructions_2d = reconstructions.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
+        else:
+            reconstructions_2d = reconstructions
+
+        # Get discriminator predictions for reconstructions
+        # The discriminator outputs logits for each feature map position
+        fake_logits = self.discriminator(reconstructions_2d, grad_ckpt=self.grad_ckpt)
+
+        # Compute generator loss based on loss type
+        if self.loss_type == 'hinge':
+            # Hinge loss: generator wants fake_logits to be > 0 (real)
+            gen_loss = -torch.mean(torch.clamp(fake_logits, max=0))
+        elif self.loss_type == 'non_saturating':
+            # Non-saturating GAN loss: L_G = -E[log(D(G(z)))]
+            gen_loss = F.softplus(-fake_logits).mean()
+        elif self.loss_type == 'least_squares':
+            # Least squares GAN loss: L_G = E[(D(G(z)) - 1)^2]
+            gen_loss = torch.mean((fake_logits - 1) ** 2)
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}")
+
+        # Apply schedule
+        gen_loss_weighted = self.schedule(iteration) * gen_loss
+
+        if torch.isnan(gen_loss_weighted).any():
+            raise ValueError("[DINO_DISC] NaN detected in loss")
+
+        return dict(dino_disc=gen_loss_weighted)
+
+    def discriminator_loss(self, inputs, output_batch, iteration) -> dict[str, torch.Tensor]:
+        """
+        Compute discriminator loss (for updating discriminator parameters separately).
+        This should be called in a separate training step if using alternating optimization.
+
+        Returns:
+            Dict with 'disc_real', 'disc_fake', and 'disc_total' losses
+        """
+        if not self.enabled or self.schedule(iteration) == 0.0:
+            return dict()
+
+        reconstructions = output_batch[RECON_KEY].detach()  # Detach to not update generator
+        input_images = inputs[INPUT_KEY]
+
+        # Handle video inputs
+        if input_images.ndim == 5:
+            B, C, T, H, W = input_images.shape
+            input_images_2d = input_images.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
+            reconstructions_2d = reconstructions.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
+        else:
+            input_images_2d = input_images
+            reconstructions_2d = reconstructions
+
+        # Get discriminator predictions
+        real_logits = self.discriminator(input_images_2d, grad_ckpt=self.grad_ckpt)
+        fake_logits = self.discriminator(reconstructions_2d, grad_ckpt=self.grad_ckpt)
+
+        # Compute discriminator loss based on loss type
+        if self.loss_type == 'hinge':
+            # Hinge loss: L_D = E[ReLU(1 - D(x))] + E[ReLU(1 + D(G(z)))]
+            disc_loss_real = torch.mean(F.relu(1.0 - real_logits))
+            disc_loss_fake = torch.mean(F.relu(1.0 + fake_logits))
+        elif self.loss_type == 'non_saturating':
+            # Standard GAN loss: L_D = -E[log(D(x))] - E[log(1 - D(G(z)))]
+            disc_loss_real = F.softplus(-real_logits).mean()
+            disc_loss_fake = F.softplus(fake_logits).mean()
+        elif self.loss_type == 'least_squares':
+            # Least squares GAN loss: L_D = E[(D(x) - 1)^2] + E[D(G(z))^2]
+            disc_loss_real = torch.mean((real_logits - 1) ** 2)
+            disc_loss_fake = torch.mean(fake_logits ** 2)
+        else:
+            raise ValueError(f"Unknown loss_type: {self.loss_type}")
+
+        disc_loss_total = disc_loss_real + disc_loss_fake
+
+        if torch.isnan(disc_loss_total).any():
+            raise ValueError("[DINO_DISC] NaN detected in discriminator loss")
+
+        return dict(
+            disc_real=disc_loss_real,
+            disc_fake=disc_loss_fake,
+            disc_total=disc_loss_total
+        )

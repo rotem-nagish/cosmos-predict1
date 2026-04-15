@@ -32,6 +32,7 @@ import attrs
 from cosmos_predict1.tokenizer.training.losses import ReduceMode
 from cosmos_predict1.tokenizer.training.losses.continuous import (
     ColorLoss,
+    DinoDiscLoss,
     FlowLoss,
     HighFrequencyLoss,
     KLLoss,
@@ -115,6 +116,23 @@ class HighFrequencyConfig:
 
 
 @attrs.define(slots=False)
+class DinoDiscConfig:
+    # DINO-based discriminator adversarial loss
+    boundaries: list[int] = [0]
+    values: list[float] = [0.0]  # Weight for adversarial loss (typically 0.01-0.1), disabled by default
+    enabled: bool = False  # Whether to use DINO discriminator
+    dino_ckpt_path: str = 'https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth'
+    kernel_size: int = 9  # Kernel size for discriminator conv layers
+    depth: int = 12  # Number of DINO transformer blocks
+    key_depths: list[int] = attrs.field(factory=lambda: [2, 5, 8, 11])  # Layers to extract features from
+    norm_type: str = 'sbn'  # Normalization type: 'bn', 'sbn', 'lbn', 'hbn', 'gn'
+    using_spec_norm: bool = True  # Whether to use spectral normalization
+    norm_eps: float = 1e-6  # Epsilon for normalization layers
+    grad_ckpt: bool = False  # Whether to use gradient checkpointing
+    loss_type: str = 'hinge'  # Loss type: 'hinge', 'non_saturating', or 'least_squares'
+
+
+@attrs.define(slots=False)
 class VideoLoss:
     # The combined loss function, and its reduction mode.
     color: LazyDict = L(ColorLoss)(config=ColorConfig())
@@ -123,6 +141,7 @@ class VideoLoss:
     flow: LazyDict = L(FlowLoss)(config=FlowConfig())
     video_consistency: LazyDict = L(VideoConsistencyLoss)(config=VideoConsistencyConfig())
     high_frequency: LazyDict = L(HighFrequencyLoss)(config=HighFrequencyConfig())
+    dino_disc: LazyDict = L(DinoDiscLoss)(config=DinoDiscConfig())
     reduce: str = ReduceMode.MEAN.value  # model.config.loss.config.reduce={'MEAN', 'SUM', 'SUM_PER_FRAME'}
 
 
