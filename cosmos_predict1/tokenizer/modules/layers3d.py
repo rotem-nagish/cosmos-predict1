@@ -427,6 +427,160 @@ class CausalTemporalAttnBlock(nn.Module):
         return x + h_
 
 
+class WindowedAttnBlock(nn.Module):
+    """Windowed spatial attention for efficient high-resolution processing.
+
+    Partitions spatial dimensions into non-overlapping windows and computes
+    attention within each window independently. This reduces complexity from
+    O(H*W) full attention to O(window_size^2) per window.
+    """
+    def __init__(self, in_channels: int, num_groups: int, window_size: int = 8) -> None:
+        super().__init__()
+        self.window_size = window_size
+        self.norm = CausalNormalize(in_channels, num_groups=num_groups)
+        self.q = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.k = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.v = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.proj_out = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.gate = nn.Parameter(torch.zeros(1))
+
+    def window_partition(self, x: torch.Tensor) -> tuple[torch.Tensor, int, int]:
+        """Partition (B, C, H, W) into (B*num_windows, C, ws, ws)."""
+        B, C, H, W = x.shape
+        ws = self.window_size
+
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+            H_pad, W_pad = H + pad_h, W + pad_w
+        else:
+            H_pad, W_pad = H, W
+
+        nH, nW = H_pad // ws, W_pad // ws
+        x = x.view(B, C, nH, ws, nW, ws)
+        windows = x.permute(0, 2, 4, 1, 3, 5).contiguous().view(-1, C, ws, ws)
+        return windows, H, W
+
+    def window_reverse(self, windows: torch.Tensor, H: int, W: int, B: int) -> torch.Tensor:
+        """Reverse (B*num_windows, C, ws, ws) back to (B, C, H, W)."""
+        ws = self.window_size
+        C = windows.shape[1]
+
+        pad_h = (ws - H % ws) % ws
+        pad_w = (ws - W % ws) % ws
+        H_pad, W_pad = H + pad_h, W + pad_w
+        nH, nW = H_pad // ws, W_pad // ws
+
+        x = windows.view(B, nH, nW, C, ws, ws)
+        x = x.permute(0, 3, 1, 4, 2, 5).contiguous().view(B, C, H_pad, W_pad)
+
+        if pad_h > 0 or pad_w > 0:
+            x = x[:, :, :H, :W]
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h_ = self.norm(x)
+        q, k, v = self.q(h_), self.k(h_), self.v(h_)
+
+        q, batch_size = time2batch(q)
+        k, _ = time2batch(k)
+        v, _ = time2batch(v)
+
+        b, c, h, w = q.shape
+
+        q_win, H_orig, W_orig = self.window_partition(q)
+        k_win, _, _ = self.window_partition(k)
+        v_win, _, _ = self.window_partition(v)
+
+        bw, c, ws, _ = q_win.shape
+        q_win = q_win.reshape(bw, c, ws * ws).permute(0, 2, 1)
+        k_win = k_win.reshape(bw, c, ws * ws)
+        v_win = v_win.reshape(bw, c, ws * ws)
+
+        attn = torch.bmm(q_win, k_win) * (int(c) ** (-0.5))
+        attn = F.softmax(attn, dim=2)
+
+        out_win = torch.bmm(v_win, attn.permute(0, 2, 1)).reshape(bw, c, ws, ws)
+
+        h_ = self.window_reverse(out_win, H_orig, W_orig, b)
+        h_ = batch2time(h_, batch_size)
+        h_ = self.proj_out(h_)
+        return x + self.gate * h_
+
+
+class HierarchicalAttnBlock(nn.Module):
+    """Hierarchical attention: local windowed + cross-resolution.
+
+    High-resolution tokens attend locally within windows and globally to
+    low-resolution bottleneck features. This enables information flow from
+    the bottleneck to high-res positions.
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        lowres_channels: int,
+        num_groups: int,
+        window_size: int = 8,
+    ) -> None:
+        super().__init__()
+        self.local_attn = WindowedAttnBlock(in_channels, num_groups, window_size)
+
+        self.norm_cross = CausalNormalize(in_channels, num_groups=num_groups)
+        self.q_cross = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.k_cross = CausalConv3d(lowres_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.v_cross = CausalConv3d(lowres_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.proj_out_cross = CausalConv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x: torch.Tensor, x_lowres: torch.Tensor) -> torch.Tensor:
+        h_local = self.local_attn(x)
+
+        h_cross = self.norm_cross(x)
+        q = self.q_cross(h_cross)
+        k = self.k_cross(x_lowres)
+        v = self.v_cross(x_lowres)
+
+        q, batch_size = time2batch(q)
+        k, _ = time2batch(k)
+        v, _ = time2batch(v)
+
+        bt, c, h, w = q.shape
+        _, _, h_low, w_low = k.shape
+
+        q = q.reshape(bt, c, h * w).permute(0, 2, 1)
+        k = k.reshape(bt, c, h_low * w_low)
+        v = v.reshape(bt, c, h_low * w_low)
+
+        attn = torch.bmm(q, k) * (int(c) ** (-0.5))
+        attn = F.softmax(attn, dim=2)
+
+        out = torch.bmm(v, attn.permute(0, 2, 1)).reshape(bt, c, h, w)
+        out = batch2time(out, batch_size)
+        out = self.proj_out_cross(out)
+
+        return h_local + out
+
+
+class DownBlock(nn.Module):
+    def __init__(self, cin, cout):
+        super().__init__()
+        self.conv = nn.Conv3d(cin, cout, kernel_size=3, stride=(1, 2, 2), padding=1)
+        self.refine = nn.Sequential(nn.GELU(), nn.Conv3d(cout, cout, 3, padding=1), nn.GELU())
+
+    def forward(self, x):
+        return self.refine(self.conv(x))
+
+
+class UpBlock(nn.Module):
+    def __init__(self, cin, cout):
+        super().__init__()
+        self.refine = nn.Sequential(nn.GELU(), nn.Conv3d(cin, cin, 3, padding=1), nn.GELU())
+        self.up = nn.Sequential(nn.Upsample(scale_factor=(1, 2, 2), mode="nearest"), nn.Conv3d(cin, cout, 3, padding=1))
+
+    def forward(self, x):
+        return self.up(self.refine(x))
+
+
 class EncoderBase(nn.Module):
     def __init__(
         self,
@@ -685,6 +839,11 @@ class EncoderFactorized(nn.Module):
         self.num_resolutions = len(channels_mult)
         self.num_res_blocks = num_res_blocks
 
+        # Hierarchical attention config
+        self.use_hierarchical_attn = ignore_kwargs.get("use_hierarchical_attention", False)
+        self.hierarchical_attn_window_size = ignore_kwargs.get("hierarchical_attn_window_size", 8)
+        hierarchical_attn_resolutions = ignore_kwargs.get("hierarchical_attn_resolutions", [64])
+
         # Patcher.
         patch_size = ignore_kwargs.get("patch_size", 1)
         self.patcher3d = Patcher3D(patch_size, ignore_kwargs.get("patch_method", "rearrange"))
@@ -738,6 +897,10 @@ class EncoderFactorized(nn.Module):
                             CausalAttnBlock(block_in, num_groups=1),
                             CausalTemporalAttnBlock(block_in, num_groups=1),
                         )
+                    )
+                elif self.use_hierarchical_attn and curr_res in hierarchical_attn_resolutions:
+                    attn.append(
+                        WindowedAttnBlock(block_in, num_groups=1, window_size=self.hierarchical_attn_window_size)
                     )
             down = nn.Module()
             down.block = block
@@ -831,6 +994,11 @@ class DecoderFactorized(nn.Module):
         self.num_resolutions = len(channels_mult)
         self.num_res_blocks = num_res_blocks
 
+        # Hierarchical attention config
+        self.use_hierarchical_attn = ignore_kwargs.get("use_hierarchical_attention", False)
+        self.hierarchical_attn_window_size = ignore_kwargs.get("hierarchical_attn_window_size", 8)
+        hierarchical_attn_resolutions = ignore_kwargs.get("hierarchical_attn_resolutions", [64])
+
         # UnPatcher.
         patch_size = ignore_kwargs.get("patch_size", 1)
         self.unpatcher3d = UnPatcher3D(patch_size, ignore_kwargs.get("patch_method", "rearrange"))
@@ -846,6 +1014,7 @@ class DecoderFactorized(nn.Module):
 
         block_in = channels * channels_mult[self.num_resolutions - 1]
         curr_res = (resolution // patch_size) // 2 ** (self.num_resolutions - 1)
+        self.bottleneck_channels = block_in
         self.z_shape = (1, z_channels, curr_res, curr_res)
         logging.info("Working with z of shape {} = {} dimensions.".format(self.z_shape, np.prod(self.z_shape)))
 
@@ -877,6 +1046,7 @@ class DecoderFactorized(nn.Module):
         legacy_mode = ignore_kwargs.get("legacy_mode", False)
         # upsampling
         self.up = nn.ModuleList()
+        temp_curr_res = curr_res
         for i_level in reversed(range(self.num_resolutions)):
             block = nn.ModuleList()
             attn = nn.ModuleList()
@@ -891,21 +1061,26 @@ class DecoderFactorized(nn.Module):
                     )
                 )
                 block_in = block_out
-                if curr_res in attn_resolutions:
+                if temp_curr_res in attn_resolutions:
                     attn.append(
                         nn.Sequential(
                             CausalAttnBlock(block_in, num_groups=1),
                             CausalTemporalAttnBlock(block_in, num_groups=1),
                         )
                     )
+                elif self.use_hierarchical_attn and temp_curr_res in hierarchical_attn_resolutions:
+                    attn.append(
+                        HierarchicalAttnBlock(
+                            in_channels=block_in,
+                            lowres_channels=self.bottleneck_channels,
+                            num_groups=1,
+                            window_size=self.hierarchical_attn_window_size,
+                        )
+                    )
             up = nn.Module()
             up.block = block
             up.attn = attn
             if i_level != 0:
-                # The layer index for temporal/spatial downsampling performed
-                # in the encoder should correspond to the layer index in
-                # reverse order where upsampling is performed in the decoder.
-                # If you've a pre-trained model, you can simply finetune.
                 i_level_reverse = self.num_resolutions - i_level - 1
                 if legacy_mode:
                     temporal_up = i_level_reverse < self.num_temporal_ups
@@ -915,7 +1090,7 @@ class DecoderFactorized(nn.Module):
                     i_level_reverse < self.num_spatial_ups and self.num_spatial_ups > self.num_temporal_ups
                 )
                 up.upsample = CausalHybridUpsample3d(block_in, spatial_up=spatial_up, temporal_up=temporal_up)
-                curr_res = curr_res * 2
+                temp_curr_res = temp_curr_res * 2
             self.up.insert(0, up)  # prepend to get consistent order
 
         # end
@@ -933,12 +1108,18 @@ class DecoderFactorized(nn.Module):
         h = self.mid.attn_1(h)
         h = self.mid.block_2(h)
 
+        h_bottleneck = h if self.use_hierarchical_attn else None
+
         # decoder blocks.
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks + 1):
                 h = self.up[i_level].block[i_block](h)
                 if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h)
+                    attn_module = self.up[i_level].attn[i_block]
+                    if isinstance(attn_module, HierarchicalAttnBlock):
+                        h = attn_module(h, h_bottleneck)
+                    else:
+                        h = attn_module(h)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 
