@@ -37,6 +37,9 @@ from cosmos_predict1.utils.lazy_config import LazyCall, LazyDict
 
 _PROB_OF_CROP_ONLY: float = 0.1
 
+# Keys that carry video data in the grid->original dataset
+_GRID_VIDEO_KEYS = ["video", "target_video"]
+
 
 def video_train_augmentations(
     input_keys: list[str],
@@ -106,3 +109,38 @@ def video_val_augmentations(
         "unsqueeze_padding": LazyCall(UnsqueezeImage)(input_keys=["padding_mask"]),
     }
     return augmenations
+
+
+def grid_video_train_augmentations() -> dict:
+    """Augmentations for grid->original training.
+
+    RandomReverse and HorizontalFlip accept multiple input_keys and apply the
+    SAME random decision to all of them, keeping video and target_video in sync.
+    Normalize is applied to both keys so the decoder output and reconstruction
+    target live in the same [-1, 1] range.
+    """
+    return {
+        "random_reverse": LazyCall(RandomReverse)(
+            input_keys=_GRID_VIDEO_KEYS,
+            args={"prob": 0.5},
+        ),
+        "horizontal_flip": LazyCall(HorizontalFlip)(
+            input_keys=_GRID_VIDEO_KEYS,
+        ),
+        "normalize": LazyCall(Normalize)(
+            input_keys=_GRID_VIDEO_KEYS,
+            args={"mean": 0.5, "std": 0.5},
+        ),
+        "unsqueeze_padding": LazyCall(UnsqueezeImage)(input_keys=["padding_mask"]),
+    }
+
+
+def grid_video_val_augmentations() -> dict:
+    """Validation augmentations for grid->original (no random flips)."""
+    return {
+        "normalize": LazyCall(Normalize)(
+            input_keys=_GRID_VIDEO_KEYS,
+            args={"mean": 0.5, "std": 0.5},
+        ),
+        "unsqueeze_padding": LazyCall(UnsqueezeImage)(input_keys=["padding_mask"]),
+    }

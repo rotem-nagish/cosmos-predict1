@@ -77,10 +77,11 @@ class TokenizerModel(Model):
             encoder_params = list(self.network.encoder.parameters())
             decoder_params = list(self.network.decoder.parameters())
 
+            # Collect any other parameters (e.g., quantizer, etc.)
             encoder_param_ids = {id(p) for p in encoder_params}
             decoder_param_ids = {id(p) for p in decoder_params}
             other_params = [p for p in self.network.parameters()
-                            if id(p) not in encoder_param_ids and id(p) not in decoder_param_ids]
+                           if id(p) not in encoder_param_ids and id(p) not in decoder_param_ids]
 
             param_groups = [
                 {"params": encoder_params, "lr": base_lr * encoder_lr_scale},
@@ -92,9 +93,10 @@ class TokenizerModel(Model):
             log.info(f"Using separate learning rates: encoder_lr={base_lr * encoder_lr_scale:.2e}, "
                      f"decoder_lr={base_lr:.2e}, encoder_lr_scale={encoder_lr_scale}")
 
+            # Instantiate optimizer directly with param_groups to avoid OmegaConf issues
             optimizer_cls = optimizer_config._target_
             optimizer_kwargs = {k: v for k, v in optimizer_config.items()
-                                if k not in ('_target_', 'params')}
+                               if k not in ('_target_', 'params')}
             optimizer = optimizer_cls(param_groups, **optimizer_kwargs)
         else:
             optimizer_config.params = self.network.parameters()
@@ -109,6 +111,14 @@ class TokenizerModel(Model):
         if self.config.ema.enabled:
             self.ema.to(dtype=torch.float32)
         self.network = self.network.to(dtype=self.precision, memory_format=memory_format)
+        # Keep part-fusion modules in fp32 so that AdamW updates (lr ≈ 1e-4)
+        # are not swallowed by bf16's low precision (ULP ≈ 1e-3 around 0.1).
+        for attr in ("part_fusion_attn", "part_fusion_mid"):
+            mod = getattr(self.network, attr, None)
+            if mod is not None:
+                mod.float()
+        for mod in getattr(self.network, "part_fusion_levels", []):
+            mod.float()
         self.loss = self.loss.to(dtype=self.precision, memory_format=memory_format)
 
     def state_dict(
@@ -137,6 +147,21 @@ class TokenizerModel(Model):
 
         # If strict is True, ensure all parameters are loaded (except the excluded ones)
         missing_keys = set(own_state.keys()) - set(filtered_state_dict.keys())
+
+        # Allow pose_mlp parameters to be missing (newly added module)
+        pose_mlp_keys = {k for k in missing_keys if 'pose_mlp' in k or 'spatial_attn' in k or 'temporal_conv' in k}
+        missing_keys = missing_keys - pose_mlp_keys
+
+        if pose_mlp_keys:
+            log.warning(f"Pose MLP parameters not found in checkpoint (will be randomly initialized): {pose_mlp_keys}")
+
+        # Allow part fusion parameters to be missing (newly added module)
+        part_fusion_keys = {k for k in missing_keys if 'part_fusion_' in k}
+        missing_keys = missing_keys - part_fusion_keys
+
+        if part_fusion_keys:
+            log.warning(f"Part fusion parameters not found in checkpoint (will be randomly initialized): {part_fusion_keys}")
+
         if missing_keys and strict:
             raise KeyError(f"Missing keys in state_dict: {missing_keys}")
 
@@ -145,6 +170,7 @@ class TokenizerModel(Model):
         if hasattr(consistency_loss, "enabled") and consistency_loss.enabled:
             _input_key = self.get_input_key(data_batch)
             if _input_key is self.video_key:
+                # Pass mask to shuffle if use_mask is enabled
                 mask = data_batch.get("loss_mask", None) if consistency_loss.use_mask else None
                 data_batch[_input_key] = consistency_loss.shuffle(data_batch[_input_key], mask=mask)
         return
@@ -167,7 +193,10 @@ class TokenizerModel(Model):
 
         # Do the forward pass.
         tensor_batch = data_batch[self.get_input_key(data_batch)]
-        output_batch = self.network(tensor_batch)
+
+        mask = data_batch.get("loss_mask", None) if self.network.training else None
+        crop_bboxes = data_batch.get("crop_bboxes", None)
+        output_batch = self.network(tensor_batch, mask=mask, crop_bboxes=crop_bboxes)
         output_batch = output_batch if self.network.training else output_batch._asdict()
 
         # A callback proxy to modify the output after the forward pass.
@@ -183,11 +212,15 @@ class TokenizerModel(Model):
         output_dict = self._network_forward(data_batch)
         input_images, recon_images = data_batch[_input_key], output_dict[RECON_KEY]
 
-        # pass loss_mask to loss computation
+        # For grid→original training the reconstruction target is the original video,
+        # not the grid video that was encoded.
+        target_images = data_batch.get("target_video", input_images)
+
+        # pass loss_mask and gt_pose to loss computation
         inputs = {
-            INPUT_KEY: input_images,
-            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images)),
-            "gt_pose": data_batch.get("gt_pose", None),
+            INPUT_KEY: target_images,
+            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(target_images)),
+            "gt_pose": data_batch.get("gt_pose", None)
         }
 
         loss_dict, loss_value = self.loss(inputs, output_dict, iteration)
@@ -204,17 +237,22 @@ class TokenizerModel(Model):
         output_dict = self._network_forward(data_batch)
         input_images, recon_images = data_batch[_input_key], output_dict[RECON_KEY]
 
-        # pass loss_mask to loss computation
+        # For grid→original training the reconstruction target is the original video.
+        target_images = data_batch.get("target_video", input_images)
+
+        # pass loss_mask and gt_pose to loss computation
         inputs = {
-            INPUT_KEY: input_images,
-            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(input_images)),
-            "gt_pose": data_batch.get("gt_pose", None),
+            INPUT_KEY: target_images,
+            MASK_KEY: data_batch.get("loss_mask", torch.ones_like(target_images)),
+            "gt_pose": data_batch.get("gt_pose", None)
         }
 
         loss_dict, loss_value = self.loss(inputs, output_dict, iteration)
+
         metric_dict = self.metric(inputs, output_dict, iteration)
         loss_dict.update(metric_dict)
         prediction_key = EMA_PREDICTION if ema_model else PREDICTION
+
         return dict({prediction_key: recon_images, **loss_dict}), loss_value
 
     @torch.inference_mode()

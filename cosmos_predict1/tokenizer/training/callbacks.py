@@ -377,12 +377,32 @@ class WandBLoggerCallback(callback.Callback):
                 lr = self.trainer.scheduler.get_last_lr()[0]
                 metrics["train/learning_rate"] = lr
 
-            # Log gradient norm if available from GradClipCallback
-            if hasattr(self.trainer, "callbacks") and hasattr(self.trainer.callbacks, "callbacks"):
-                for callback_name, callback_obj in self.trainer.callbacks.callbacks.items():
-                    if isinstance(callback_obj, GradClipCallback) and callback_obj.last_grad_norm is not None:
-                        metrics["train/grad_norm"] = callback_obj.last_grad_norm
-                        break
+            # Log part fusion diagnostics (gate values, part_embed norms, gradients)
+            network = getattr(model, "network", None)
+            if network is not None:
+                # Collect all PartFusionAttention modules
+                fusion_modules = {}
+                for attr in ("part_fusion_attn", "part_fusion_mid"):
+                    mod = getattr(network, attr, None)
+                    if mod is not None:
+                        fusion_modules[attr] = mod
+                for attr in ("part_fusion_levels",):
+                    mods = getattr(network, attr, None)
+                    if mods is not None:
+                        for i, mod in enumerate(mods):
+                            fusion_modules[f"{attr}.{i}"] = mod
+
+                crop_names = ["face", "left_hand", "right_hand"]
+                for name, mod in fusion_modules.items():
+                    prefix = f"part_fusion/{name}"
+                    metrics[f"{prefix}/gate"] = mod.gate.item()
+                    if mod.gate.grad is not None:
+                        metrics[f"{prefix}/gate_grad"] = mod.gate.grad.item()
+                    # Part embed norms (one per crop, not the original)
+                    for i, pn in enumerate(crop_names[:mod.part_embed.shape[0]]):
+                        metrics[f"{prefix}/embed_norm_{pn}"] = mod.part_embed[i].norm().item()
+                    # out_proj weight norm
+                    metrics[f"{prefix}/out_proj_norm"] = mod.out_proj.weight.norm().item()
 
             wandb.log(metrics, step=iteration)
 

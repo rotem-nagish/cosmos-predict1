@@ -49,6 +49,18 @@ def register_training_data(cs):
                 ),
             )
 
+    # Grid->original dataset (128x512 grid videos -> dictio*.mp4 reconstruction target)
+    cs.store(
+        group="data_train",
+        package="dataloader_train",
+        name="SL_ft_grid_video256",
+        node=DATALOADER_OPTIONS["video_loader_grid"](
+            dataset_name="SL_ft_grid_video256",
+            is_train=True,
+            resolution="256",
+        ),
+    )
+
 
 def register_val_data(cs):
     for data_source in ["mock", "SL_ft"]: #"hdvila",
@@ -63,6 +75,18 @@ def register_val_data(cs):
                     resolution=resolution,
                 ),
             )
+
+    # Grid->original dataset (validation)
+    cs.store(
+        group="data_val",
+        package="dataloader_val",
+        name="SL_ft_grid_video256",
+        node=DATALOADER_OPTIONS["video_loader_grid"](
+            dataset_name="SL_ft_grid_video256",
+            is_train=False,
+            resolution="256",
+        ),
+    )
 
 
 def register_net(cs):

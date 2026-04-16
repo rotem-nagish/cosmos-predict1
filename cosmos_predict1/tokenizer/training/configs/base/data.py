@@ -24,7 +24,8 @@ Available dataloader options:
 from torch.utils.data import DataLoader
 
 from cosmos_predict1.tokenizer.training.configs.base.mock_data import get_mock_video_dataloader
-from cosmos_predict1.tokenizer.training.datasets.dataset_provider import dataset_entry, pose_collate_fn
+from cosmos_predict1.tokenizer.training.datasets.dataset_provider import dataset_entry, grid_dataset_entry, pose_collate_fn
+from cosmos_predict1.tokenizer.training.datasets.utils import get_collate_w_pose_fn
 from cosmos_predict1.utils.lazy_config import LazyCall
 
 DATALOADER_OPTIONS = {}
@@ -73,4 +74,38 @@ def get_video_dataloader(
         persistent_workers=is_train,
         pin_memory=True,
         collate_fn=pose_collate_fn,
+    )
+
+
+@dataloader_register("video_loader_grid")
+def get_video_dataloader_grid(
+    dataset_name,  # unused -- kept for interface consistency with other loaders
+    is_train,
+    batch_size=4,
+    num_video_frames=49,
+    resolution="256",   # unused -- grid is always 256x256
+    crop_height=256,    # unused -- grid is always 256x256
+    num_workers=1,
+    pose_normalization="minmax",
+    limit=None,
+    mask_type='bb',
+):
+    """Dataloader for the grid->original video tokenizer training."""
+    return LazyCall(DataLoader)(
+        dataset=LazyCall(grid_dataset_entry)(
+            is_train=is_train,
+            num_video_frames=num_video_frames,
+            pose_normalization=pose_normalization,
+            limit=limit,
+            target_size=(256, 256),
+            mask_type=mask_type,
+        ),
+        batch_size=batch_size,
+        num_workers=num_workers,
+        prefetch_factor=2,
+        shuffle=is_train,
+        sampler=None,
+        persistent_workers=False,
+        pin_memory=True,
+        collate_fn=LazyCall(get_collate_w_pose_fn)(),
     )

@@ -86,6 +86,67 @@ VIDEO_VAL_CROP_SIZE_INFO: dict[str, tuple[int, int]] = {
 }
 
 
+def collate_w_pose(batch):
+    """
+    Custom collate function that handles Pose objects in addition to tensors.
+
+    Args:
+        batch: List of dicts from VideoDataset.__getitem__
+               Each dict contains:
+               - video: tensor [C, T, H, W]
+               - video_name: dict with metadata
+               - gt_pose: Pose object or None
+               - fps: int
+               - image_size: tensor
+               - num_frames: int
+               - padding_mask: tensor
+               - loss_mask: tensor [C, T, H, W]
+
+    Returns:
+        Collated batch dict with:
+        - video: tensor [B, C, T, H, W]
+        - gt_pose: list of Pose objects (length B)
+        - loss_mask: tensor [B, C, T, H, W]
+        - Other fields handled appropriately
+    """
+    if len(batch) == 0:
+        return {}
+
+    # Initialize result dict
+    result = {}
+
+    # Stack tensor fields
+    tensor_keys = ['video', 'target_video', 'loss_mask', 'image_size', 'padding_mask']
+    for key in tensor_keys:
+        if key in batch[0]:
+            result[key] = torch.stack([item[key] for item in batch], dim=0)
+
+    # Keep gt_pose as a list (Pose objects can't be stacked)
+    if 'gt_pose' in batch[0]:
+        result['gt_pose'] = [item['gt_pose'] for item in batch]
+
+    # Keep video_name as a list of dicts
+    if 'video_name' in batch[0]:
+        result['video_name'] = [item['video_name'] for item in batch]
+
+    # Take scalar/constant values from first item
+    scalar_keys = ['fps', 'num_frames']
+    for key in scalar_keys:
+        if key in batch[0]:
+            result[key] = batch[0][key]
+
+    return result
+
+
+def get_collate_w_pose_fn():
+    """
+    Helper function that returns the collate_w_pose function reference.
+    This is needed for LazyConfig compatibility - we can't pass function references
+    directly through OmegaConf, but we can call a function that returns the function.
+    """
+    return collate_w_pose
+
+
 def _pick_closest_aspect_ratio(height, width):
     """
     Given a video's height and width, return the closest aspect ratio key

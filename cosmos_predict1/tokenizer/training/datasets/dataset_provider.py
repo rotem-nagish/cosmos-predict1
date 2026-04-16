@@ -21,6 +21,7 @@ cosmos_predict1.tokenizer.training.datasets.dataset_provider \
     --dataset_name hdvila_video \
     --is_train
 """
+import os
 
 from torch.utils.data._utils.collate import default_collate
 
@@ -31,6 +32,8 @@ from cosmos_predict1.tokenizer.training.datasets.augmentation_provider import (
 from cosmos_predict1.tokenizer.training.datasets.utils import categorize_aspect_and_store
 from cosmos_predict1.tokenizer.training.datasets.video_dataset import Dataset
 from cosmos_predict1.utils.lazy_config import instantiate
+
+BASE_DIR = "/mnt/rylo-tnas/users/rotem/sign/data" if "/mnt/rylo-tnas" in os.getcwd() else "/workspace/datasets"
 
 
 def pose_collate_fn(batch):
@@ -53,6 +56,10 @@ _VIDEO_PATTERN_DICT = {
     "hdvila_video": "datasets/hdvila/videos/*.mp4",
     "sl_ft_video": "/home/rotem/sign/data/*/*.mp4"
 }
+
+# Grid dataset: 128x512 grid videos -> original dictio*.mp4 reconstruction targets
+_GRID_VIDEO_PATTERN = f"{BASE_DIR}/128x512_grid_videos/dictio*.mp4"
+_GRID_ORIGINAL_DIR = f"{BASE_DIR}/processed/sign-tube/videos"
 
 
 def apply_augmentations(data_dict, augmentations_dict):
@@ -133,6 +140,44 @@ def dataset_entry(
         )
 
     # Wrap the dataset with the augmentations
+    return AugmentDataset(base_dataset, aug_dict)
+
+
+def grid_dataset_entry(
+    is_train: bool = True,
+    num_video_frames: int = 49,
+    pose_normalization: str = "minmax",
+    limit=None,
+    target_size: tuple = (256, 256),
+    crop_height: int = 256,  # unused -- kept for interface consistency with dataset_entry
+    part_fusion: bool = False,
+    fliplr_list_path: str = None,
+    mask_type: str = 'bb',
+) -> AugmentDataset:
+    """Return a dataset that encodes 256x256 grid videos and reconstructs the original."""
+    from cosmos_predict1.tokenizer.training.datasets.grid_video_dataset import GridVideoDataset
+    from cosmos_predict1.tokenizer.training.datasets.augmentation_provider import (
+        grid_video_train_augmentations,
+        grid_video_val_augmentations,
+    )
+
+    base_dataset = GridVideoDataset(
+        grid_video_pattern=_GRID_VIDEO_PATTERN,
+        original_video_dir=_GRID_ORIGINAL_DIR,
+        num_video_frames=num_video_frames,
+        pose_normalization=pose_normalization,
+        limit=limit,
+        target_size=target_size,
+        part_fusion=part_fusion,
+        fliplr_list_path=fliplr_list_path,
+        mask_type=mask_type,
+    )
+
+    aug_dict = (
+        grid_video_train_augmentations()
+        if is_train
+        else grid_video_val_augmentations()
+    )
     return AugmentDataset(base_dataset, aug_dict)
 
 
